@@ -5,7 +5,8 @@ face and camera animations. The fighter's own moves (in its moveset but neither 
 converted and appended; the generic "hub" moves that lead into them (standing, crouching, ...) get the fighter's
 cancel lists, converted, plus the donor's cancels into TTT2-only moves (tag out, ...). Neither Tekken 7 nor Tekken 8
 has a tag: what TTT2's tag system needs in the converted moves themselves (the bound moves' Tag Assault twins, the
-landing reactions' Tag Crash rows, the bound test of the air slams) is made after the donor's (tagsystem.py).
+landing reactions' Tag Crash rows) is made after the donor's (tagsystem.py). Neither has a bound either: the moves
+that bound are the definition's (MOVESET['bounds'], convert/move_overrides.py); screws, tornados and slams do not.
 
 Converting a move: requirement and property ids through the derived id maps (idmaps.py), hit location codes
 likewise, the bitfield bit-reversed (TTT2 bit 31 - i = Tekken 7 bit i), move ids by name, animations by reference:
@@ -100,16 +101,21 @@ REQ_T8ONLY = {476: ('param2', 0, 'player variable'), 439: ('param_lo', 0, 'oppon
 # where Reina's test 224(28)), its parameter a Tekken 8 roster id (8 Kazuya, 34 Lidia, ...): folded at conversion
 OWNER_IS, OWNER_IS_NOT = {'t7': {217}, 't8': {220, 224}}, {'t7': {218}, 't8': {221}}
 CHAR_IS, CHAR_IS_NOT = {'t7': {217, 219, 223}, 't8': {220, 222, 226}}, {'t7': {218}, 't8': {221}}
-# Tekken 7's screw state does not exist in TTT2: its requirement and properties become TTT2's bound. The alignment
-# has no evidence for these ids; the pairs are format facts as the community's moveset tools record them (README:
+# Tekken 7's screw (Tekken 8's tornado) does not exist in TTT2. Its hit-condition entries test that the combo has not
+# used it yet: false here, so an air hit takes the move's next entry (its air reaction), as both games do once the
+# screw is used. TTT2's bounds are the definition's moves alone (MOVESET['bounds']: Tekken 7's are the ones the Tekken
+# 7 Bound Mod makes bounds). The screw counter's property resets it when the opponent lands, as TTT2's 0x8193 does
+# the bound (PROP_OVERRIDE); its value SCREW_SPEND (the screw reactions') spends it and is left out, so a screw no
+# longer uses up the bound. The ids are format facts as the community's moveset tools record them (README:
 # Acknowledgements)
-SCREW = {'t7': 615, 't8': 724}
-BOUND = 467
-REQ_OVERRIDE = {g: {SCREW[g]: BOUND} for g in SCREW}
+SCREW, SCREW_COUNTER, SCREW_SPEND = {'t7': 615, 't8': 724}, {'t7': 0x8255, 't8': 0x82c5}, 0
+for _g in SCREW:
+    REQ_FALSE[_g][SCREW[_g]] = 'screw / tornado not used yet (TTT2 has none)'
+REQ_OVERRIDE = {'t7': {}, 't8': {}}                  # requirement ids mapped by the rules below, not the id maps
 # Tekken 7's "opponent airborne" (TTT2's 466 through the id maps). Where TTT2 bounds, Tekken 7 often slams instead:
 # [614 -> slam][614 -> air][default] in Tekken 7, [467 -> bound][466 -> air][default] in TTT2 for the same three moves
-# of Heihachi's (df+1,2 among them); the reaction map makes the slam the donor's bound reaction, so such an entry gets
-# TTT2's 467 test too (convert/tagsystem.py gated_slam)
+# of Heihachi's (df+1,2 among them); the reaction map makes the slam the donor's bound reaction, which TTT2 plays only
+# under 467: a slam plays the donor's air hit after a bound (conv_hitconds), unless the definition makes it a bound
 T7_AIR = {'t7': 614, 't8': 723}
 # Direction tests: TTT2's requirement function (sub_0404FF30) has four sets of four, front first, back last, at 81..96
 # (*(r24), *(r24 + 4), the quadrant of an angle (sub_05C5D9B4), the hit's direction *(r20)) and 97 (TTT2 only);
@@ -901,6 +907,8 @@ class Converter:
         g = self.game
         if t7id == TIGER_PROP[g]:
             return OPT_ANIM_BASE + self.opt_anims[v] if v in self.opt_anims else None
+        if t7id == SCREW_COUNTER[g] and v == SCREW_SPEND:
+            return None
         kind = VALUE_KIND[g].get(t7id)
         if kind == 'throwcam':
             return self.conv_throwcam(v)
@@ -1063,7 +1071,7 @@ class Converter:
                 continue
             v2 = self.conv_value(idv, v)
             if v2 is None:
-                self.stats['property dropped: value (sound bank / index)'] += 1
+                self.stats['property dropped: value (sound bank / index / screw spent)'] += 1
                 continue
             if self.guarded(idv) and not self.fits('prop', p, v2):      # a value TTT2 never passes (FIT)
                 self.stats['property dropped: a value TTT2 never passes'] += 1
@@ -1268,7 +1276,7 @@ class Converter:
                 continue
             v2 = self.conv_value(p['id'], self.prop_value(p))
             if v2 is None:
-                self.stats['property dropped: value (sound bank / index)'] += 1
+                self.stats['property dropped: value (sound bank / index / screw spent)'] += 1
                 continue
             if self.guarded(p['id']) and not self.fits('prop', pid, v2):    # a value TTT2 never passes (FIT)
                 self.stats['property dropped: a value TTT2 never passes'] += 1
@@ -1467,17 +1475,15 @@ class Converter:
             r, ok = self.conv_reqs(h['req'])
             if ok:
                 rl = [c for c, p in M.reqs(self.k, h['req'])]
-                if SCREW[self.game] in rl:                      # screw -> the donor's bound reactions
-                    rx = self.bound_reaction
-                else:
-                    rx = self.conv_reaction(h['reactions']) if h['reactions'] is not None else None
+                rx = self.conv_reaction(h['reactions']) if h['reactions'] is not None else None
                 entry = dict(req=r, damage=h['damage'], reactions=rx)
                 air = T7_AIR[self.game]
                 if rl == [air] and tagsystem.same_reaction(self.T, rx, self.bound_reaction):     # an air slam
-                    alone = j + 1 >= len(t) or [c for c, p in M.reqs(self.k, t[j + 1]['req'])] != [air]
-                    out += tagsystem.gated_slam(self.T, entry, out, self.bound_req, self.bound_reaction,
-                                                self.after_bound_reaction, alone)
-                    self.stats['Tekken 7 air slams -> bounds (467)'] += 1
+                    # what TTT2's bound moves play on an air hit once the bound is used: the air entry after it, or
+                    # the donor's (Negan's, Geese's, Noctis's slams have none)
+                    if j + 1 >= len(t) or [c for c, p in M.reqs(self.k, t[j + 1]['req'])] != [air]:
+                        out.append(dict(entry, reactions=self.after_bound_reaction))
+                    self.stats['air slams -> the air hit after a bound'] += 1
                 else:
                     out.append(entry)
             else:

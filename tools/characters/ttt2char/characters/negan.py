@@ -73,6 +73,9 @@ VOICE_PREFIX = 'na'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[NEGAN]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Na_2rp', 'Na_3lklprpkm', 'Na_4lrp', 'Na_4rprp', 'Na_Batrp', 'Na_Batrplk',
+                             'Na_lprpwp'), True),
     'drop_moves': r'^Na_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['na_s%02d' % k for k in range(4)]),     # the donor's intros -> his
                (r'^la_w', 'anim', ['na_w%02d' % k for k in range(4)])],         # win poses

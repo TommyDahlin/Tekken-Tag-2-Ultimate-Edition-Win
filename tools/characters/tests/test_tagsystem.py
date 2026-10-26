@@ -216,7 +216,7 @@ class Slams(unittest.TestCase):
         c.k, c.T, c.stats = t7, T.t, collections.Counter()
         c.bound_reaction, c.bound_req, c.after_bound_reaction = self.bound, self.r467, self.after
         req_of = {}
-        c.conv_reqs = lambda i: (req_of[i], True)
+        c.conv_reqs = lambda i: (req_of[i], req_of[i] is not None)
         c.conv_reaction = lambda rx: rx
         self.c, self.req_of = c, req_of
 
@@ -227,7 +227,7 @@ class Slams(unittest.TestCase):
             ri = len(self.t7.tables['requirements'])
             self.t7.tables['requirements'] += [dict(condition=c, param=0) for c in conds] + [
                 dict(condition=M.END_REQ['t7'], param=0)]
-            self.req_of[ri] = {(): self.r_none, (614,): self.r466, (615,): self.r467}[tuple(conds)]
+            self.req_of[ri] = {(): self.r_none, (614,): self.r466, (615,): None}[tuple(conds)]     # (615: false)
             self.t7.tables['hit_conditions'].append(dict(req=ri, damage=20, reactions=rx))
         return start
 
@@ -235,30 +235,31 @@ class Slams(unittest.TestCase):
         return [(h['req'], h['reactions']) for h in TS.hits(self.c.T, self.c.conv_hitconds(i))]
 
     def test_three_entries(self):
+        """A slam is no bound (the definition's bound moves are): the air entry after it plays."""
         i = self.t7_hits(([614], self.slam), ([614], self.air), ([], self.ground))
-        self.assertEqual(self.converted(i), [(self.r467, self.bound), (self.r466, self.air),
-                                             (self.r_none, self.ground)])
-        self.assertEqual(self.c.stats['Tekken 7 air slams -> bounds (467)'], 1)
+        self.assertEqual(self.converted(i), [(self.r466, self.air), (self.r_none, self.ground)])
+        self.assertEqual(self.c.stats['air slams -> the air hit after a bound'], 1)
 
     def test_two_entries(self):
+        """A slam alone: the donor's air hit after a bound."""
         i = self.t7_hits(([614], self.slam), ([], self.ground))
-        self.assertEqual(self.converted(i), [(self.r467, self.bound), (self.r466, self.after),
-                                             (self.r_none, self.ground)])
+        self.assertEqual(self.converted(i), [(self.r466, self.after), (self.r_none, self.ground)])
 
-    def test_screw_unchanged(self):
+    def test_screw_dropped(self):
+        """A screw entry is false in TTT2 (moveset.REQ_FALSE): the air entry after it plays."""
         i = self.t7_hits(([615], self.screw), ([614], self.air), ([], self.ground))
-        self.assertEqual(self.converted(i), [(self.r467, self.bound), (self.r466, self.air),
-                                             (self.r_none, self.ground)])
-        self.assertEqual(self.c.stats['Tekken 7 air slams -> bounds (467)'], 0)
+        self.assertEqual(self.converted(i), [(self.r466, self.air), (self.r_none, self.ground)])
+        self.assertEqual(self.c.stats['air slams -> the air hit after a bound'], 0)
+        self.assertIn(moveset.SCREW['t7'], moveset.REQ_FALSE['t7'])
+        self.assertIn(moveset.SCREW['t8'], moveset.REQ_FALSE['t8'])
 
     def test_air_hit_unchanged(self):
         i = self.t7_hits(([614], self.air), ([], self.ground))
         self.assertEqual(self.converted(i), [(self.r466, self.air), (self.r_none, self.ground)])
 
-    def test_slam_after_a_bound(self):
+    def test_slam_after_a_screw(self):
         i = self.t7_hits(([615], self.screw), ([614], self.slam), ([], self.ground))
-        self.assertEqual(self.converted(i), [(self.r467, self.bound), (self.r466, self.after),
-                                             (self.r_none, self.ground)])
+        self.assertEqual(self.converted(i), [(self.r466, self.after), (self.r_none, self.ground)])
 
 
 class Landing(unittest.TestCase):

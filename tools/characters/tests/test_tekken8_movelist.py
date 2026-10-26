@@ -196,7 +196,7 @@ class Convert(unittest.TestCase):
         self.assertEqual((title['demo'], title['count'], title['kind']), (0xFFFF, 0, 8))
         self.assertEqual(flash['strings'][:5], ['閃光烈拳', 'Flash Punch Combo', 'せんこうれっけん', '',
                                                 ''])
-        self.assertEqual(flash['icons'], (0, 0x300))                                      # the tornado: TTT2's bound
+        self.assertEqual(flash['icons'], (0, 0))                                          # the tornado: no bound
         self.assertEqual(parry['strings'][:6], ['Fusatsujin', 'Fusatsujin', 'Fusatsujin', 'パンチ攻撃に合わせて ☆',
                                                 'Time with punch ☆', 'Avec un coup de poing ☆'])
         # demos: TTT2's input rows {buttons, direction, frames, lit}, a wait after the last
@@ -241,8 +241,8 @@ class Convert(unittest.TestCase):
 
 
 class BoundIcons(unittest.TestCase):
-    """The definition's bounds on the bound icon (bound_hit): the presses of each entry's demo, walked by `bounds`
-    (move_overrides.command_bounds; a table here)."""
+    """The definition's bounds give the bound icon (bound_hit): the presses of each entry's demo, walked by `bounds`
+    (move_overrides.command_bounds; a table here); Tekken 8's tornado hits none."""
 
     def test_icons(self):
         texts = {'en': {'N_D2': 'Tecchuu-ate', 'C_D2': img(4) + img(21),
@@ -254,7 +254,7 @@ class BoundIcons(unittest.TestCase):
                    dict(keys=['N_UF4', 'C_UF4', ''], demo=1, icons=0x100),          # a tornado made no bound
                    dict(keys=['N_SEN', 'C_SEN', ''], demo=2),                       # the stance's way in first
                    dict(keys=['N_DASH', 'C_DASH', ''], demo=3),                     # a dash: not walked
-                   dict(keys=['N_STR', 'C_STR', ''], demo=4, icons=0x300)]          # keeps its tornado
+                   dict(keys=['N_STR', 'C_STR', ''], demo=4, icons=0x300)]          # tornado 3rd, 1st a bound
         demos = [dict(setup=[0, 1800, 0, 0, 0, 0, 0], first=f, inputs=n) for f, n in
                  ((0, 2), (2, 2), (4, 4), (8, 4), (12, 4))]
         inputs = [(0x40, 0x10, 1, 1), (0, 0, 1, 0),
@@ -274,10 +274,10 @@ class BoundIcons(unittest.TestCase):
         out = movelist.convert(mvlt(entries, demos, inputs), None, log=lambda line: None, texts_by_language=texts,
                                bounds=bounds)
         self.assertEqual([x['icons'] for x in read_ttt2(out)[0]], [(0, 0x100), (0, 0), (0, 0x100), (0, 0),
-                                                                    (0, 0x300)])
+                                                                    (0, 0x100)])
         self.assertEqual(len(walked), 4)                                            # (not the dash)
         plain = movelist.convert(mvlt(entries, demos, inputs), None, log=lambda line: None, texts_by_language=texts)
-        self.assertEqual([x['icons'] for x in read_ttt2(plain)[0]], [(0, 0), (0, 0x100), (0, 0), (0, 0), (0, 0x300)])
+        self.assertEqual([x['icons'] for x in read_ttt2(plain)[0]], [(0, 0)] * 5)
 
     def test_presses(self):
         self.assertEqual(movelist.demo_presses([(0x40, 0x10, 1, 1), (0, 0x90, 3, 1), (0, 0, 1, 0)]),

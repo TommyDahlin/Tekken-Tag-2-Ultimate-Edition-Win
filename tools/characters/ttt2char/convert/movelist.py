@@ -18,17 +18,25 @@ The command text uses the same private-use glyphs in both games (U+E000.. direct
 are pad inputs played through the fighter's own moveset, so they need no move ids.
 
 Left out: Tekken 7's drills, entries whose demo needs Rage (Rage Arts and Drives), and title lines left empty.
-Screws are bounds in the converted moveset; Tekken 7's screw hit number becomes TTT2's bound icon.
+Screws are no bounds in the converted moveset, so Tekken 7's screw hit is not shown. TTT2's bound icon names the press
+that reaches one of the definition's bound moves (MOVESET['bounds']): an entry's first demo walked through the
+converted moveset (bound_hit; Tekken 8's command lists alike).
 
 tekken8/movelist.py converts Tekken 8's command lists with the TTT2 side here (title_strings, drop_empty_titles,
 summary, write).
 """
+import re
 import struct
 
 T7_COMMAND_FOR_TTT2 = [4, 5, 8, 9, 10, 7, 12, 15, 14]   # TTT2's jp en fr it de es ru ko zh <- Tekken 7's index
-KIND_TITLE, KIND_KEY_MOVE, KIND_DRILL = 8, 14, 15
+KIND_MOVE, KIND_TITLE, KIND_KEY_MOVE, KIND_DRILL = 0, 8, 14, 15
 ARROW = ''                                         # the arrow between the parts of a combo
 OPPONENT_ACTION = {9: 10}                                # Tekken 7's "opponent attacks" (parries) -> TTT2's
+# a demo input's stick (0x10 u, 0x20 f, 0x40 d, 0x80 b) and buttons as a cancel row's direction and press bits (the
+# bound icons: bound_hit; Tekken 7's and Tekken 8's demo inputs alike); the button glyphs of a command (U+E014 + mask)
+DEMO_STICK = {0: 0x20, 0x20: 0x40, 0x80: 0x10, 0x40: 0x4, 0x10: 0x100, 0x60: 0x8, 0xC0: 0x2, 0x30: 0x200, 0x90: 0x80}
+DEMO_BUTTONS = {0x80: 1, 0x10: 2, 0x40: 4, 0x20: 8}
+BUTTON_CHARS = range(0xE015, 0xE024)
 
 
 def _cstr(d, o):
@@ -55,8 +63,9 @@ def read_tekken7(m):
     return entries, demos, inputs
 
 
-def convert(m, log=print):
-    """Tekken 7 MVLT bytes -> TTT2 MVLT bytes."""
+def convert(m, log=print, bounds=None):
+    """Tekken 7 MVLT bytes -> TTT2 MVLT bytes. bounds: the definition's bound moves for the bound icons
+    (move_overrides.command_bounds; None: no icons)."""
     entries, demos, inputs = read_tekken7(m)
     out, out_demos, out_inputs = [], [], []
     dropped = {'drills': 0, 'needs Rage': 0, 'empty title lines': 0}
@@ -79,12 +88,48 @@ def convert(m, log=print):
             for k in range(d['inputs']):
                 r = inputs[d['first'] + k]
                 out_inputs.append(bytes([r[1], r[0], r[2], r[3]]))
-        screw = (x['icons'] >> 8) & 0xFF
+        hit = 0
+        if bounds is not None and own and x['kind'] == KIND_MOVE:
+            hit = bound_hit(bounds, demo_presses(inputs[own[0]['first']:own[0]['first'] + own[0]['inputs']]),
+                            command_presses(s[5]))
         out.append(dict(strings=strings, demo=first, count=len(own), kind=x['kind'], demo_kind=x['demo_kind'],
-                        icons=(0, screw << 8)))
+                        icons=(0, hit << 8)))
     kept, dropped['empty title lines'] = drop_empty_titles(out)
     log(summary(kept, out_demos, dropped))
     return write(kept, out_demos, out_inputs)
+
+
+def demo_presses(records):
+    """[(stick, buttons, frame)] of a demo's presses (a cancel row's direction and press bits, the frame from 0);
+    None when the stick moves without a press (a dash or a motion input: not walked)."""
+    out, held, frame = [], 0, 0
+    for direction, buttons, frames, _ in records:
+        new = buttons & ~held
+        if new:
+            out.append((DEMO_STICK.get(direction & 0xF0, 0),
+                        sum(bit for demo, bit in DEMO_BUTTONS.items() if new & demo), frame))
+        elif direction:
+            return None
+        held = buttons
+        frame += max(1, frames)
+    return out
+
+
+def command_presses(command):
+    """How many presses a Tekken 7 command shows: its button glyphs, less the ones in brackets (an alternative,
+    "(or [1+3])")."""
+    return sum(1 for ch in re.sub(r'\([^)]*\)', '', command or '') if ord(ch) in BUTTON_CHARS)
+
+
+def bound_hit(bounds, presses, shown):
+    """The hit TTT2's bound icon names (0: none): the first press of a command that reaches a move the definition
+    makes a bound. bounds(presses) -> {press number: bound} for the presses that reach a move the definition names
+    (move_overrides.command_bounds); presses: the entry's first demo's (demo_presses; None: not walked); shown: how
+    many the command's text shows: the demo's presses before them (a stance's way in) are not counted."""
+    if not presses or len(presses) < shown:
+        return 0
+    before = len(presses) - shown
+    return min((n - before for n, bound in bounds(presses).items() if bound and n > before), default=0)
 
 
 def title_strings(commands):

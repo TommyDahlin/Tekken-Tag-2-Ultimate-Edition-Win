@@ -17,8 +17,8 @@ import types
 
 from . import InputError, pack, shared, source as sources
 from .characters import CHARACTERS, GAMES, definition, game_of
-from .convert import art, chains, cloth, effects as fx, idmaps, itemdb, model, movelist, moveset, outfits, particles, \
-    tagsystem, tiger, voice, weapons
+from .convert import art, chains, cloth, effects as fx, idmaps, itemdb, model, move_overrides, movelist, moveset, \
+    outfits, particles, tagsystem, tiger, voice, weapons
 from .tekken7 import tkmvst
 from .tekken7.autodump import FILES
 from .tekken7.pak import EncryptedError, Paks, pak_names
@@ -424,7 +424,8 @@ def _converted_moveset(paks, archives, d, slot, place, k, heihachi, donor_xml, e
     mvl = None
     if k.movelist[:4] == b'MVLT':
         step('command list')
-        mvl = movelist.convert(k.movelist, log=lambda s: log('         ' + s))
+        mvl = movelist.convert(k.movelist, log=lambda s: log('         ' + s),
+                               bounds=move_overrides.command_bounds(c))     # the definition's bounds' icons
     return moves, motions, xml, effect_files, mvl
 
 
@@ -454,7 +455,6 @@ def _converted_tekken8_moveset(source, archives, d, place, saved, donor_xml, eff
     voices8: the TTT2 voice of each of its moves' Tekken 8 voices (tekken8/voice.py's move_voices on the banks the
     voice step built)."""
     from .tekken8 import anim, anmbin, motbin as motbin8, movelist as movelist8, movenames, voice as voice8
-    from .convert import move_overrides
     k, files, references = saved
 
     def sub(s):

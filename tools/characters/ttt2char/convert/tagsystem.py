@@ -5,12 +5,14 @@ Tekken 7 has no tag, and TTT2 keeps its tag system in the movesets, as moves and
 * Tag Assault: a TTT2 bound move X (a hit condition on 467) has a cancel on the tag button during its startup into a
   twin XT: X with a hit condition on 468 in front (its reaction bounces the opponent for the partner) and a cancel on
   that hit into XDA, X's animation without a hit, whose properties bring the partner in (its Co_Change_Kam takes the
-  tag-in kind 11) while it returns to the stance. The converter makes Tekken 7's screws bounds but has no XT or XDA
-  to give them: add_tag_assault makes both, after the donor's own triples (assault_template).
-* Bounds: where TTT2 has a bound, Tekken 7 often has an air slam instead (the same move of Heihachi's in both games:
-  [614 airborne -> slam][614 -> air][default] in Tekken 7, [467 -> bound][466 -> air][default] in TTT2); the id maps
-  make the slam the bound reaction without the 467 test, so it bounds on every air hit (TTT2 has no such entry).
-  gated_slam gives such entries TTT2's shape.
+  tag-in kind 11) while it returns to the stance. The converter makes the definition's bound moves bounds
+  (move_overrides.py) but has no XT or XDA to give them: add_tag_assault makes both, after the donor's own triples
+  (assault_template).
+* Bounds: bound_shape gives the donor's bound entry and what its air hit plays once the bound is used. Where TTT2 has
+  a bound, Tekken 7 often has an air slam instead (the same move of Heihachi's in both games: [614 airborne -> slam]
+  [614 -> air][default] in Tekken 7, [467 -> bound][466 -> air][default] in TTT2); the id maps make the slam the bound
+  reaction without the 467 test, so it would bound on every air hit (TTT2 has no such entry): the converter plays the
+  air hit after a bound for it instead.
 * Tag Crash: a juggled fighter plays its reactions from the ATTACKER's moveset (sub_041570D8), and TTT2's landing
   reactions have a cancel on 2 + tag held, the partner in Rage, into the tag crash just before their tech (ukemi)
   rows, and one on tag into the plain tag-out after them. landing_template / add_landing_rows give the converted
@@ -152,19 +154,6 @@ def same_reaction(tables, a, b):
     if a is None or b is None:
         return False
     return tables['reactions'][a]['default'] == tables['reactions'][b]['default']
-
-
-def gated_slam(tables, entry, before, bound_req, bound_reaction, after_reaction, alone):
-    """A Tekken 7 air slam's hit-condition entry (converted: its 466 requirement list, the bound reaction) -> TTT2's
-    entries for it: [467 -> bound][the air entry], as TTT2 Heihachi's same moves have (alone: Tekken 7 has no air
-    entry after the slam (Negan's, Geese's, Noctis's): the air entry made, with the donor's reaction after a bound);
-    after a bound entry already in the list (`before`, the entries converted so far), only the air entry."""
-    if any(has(tables, e['req'], BOUND) for e in before):
-        return [dict(entry, reactions=after_reaction)]
-    out = [dict(entry, req=bound_req, reactions=bound_reaction)]
-    if alone:
-        out.append(dict(entry, reactions=after_reaction))
-    return out
 
 
 # ------------------------------------------------------------------------------------------------ Tag Assault

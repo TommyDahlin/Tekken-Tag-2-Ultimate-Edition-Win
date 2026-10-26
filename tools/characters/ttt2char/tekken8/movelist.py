@@ -34,16 +34,17 @@ Left out: what TTT2 has no counterpart for: the drills, key moves, Heat tips and
 21) and all after the first of them (the game modes' lists: Arcade Quest's notes, Tekken Ball's moves, as moves
 without demos), the Heat Moves and Rage Moves sections, entries whose demo needs Heat or Rage or whose text uses
 Heat or Rage buttons (2+3 is Heat Burst or Heat Smash in Tekken 8), entries without text or with glyphs not known
-here, and title lines left empty. Tornados are bounds in the converted moveset; the tornado hit becomes TTT2's
-bound icon. The definition's own bounds (MOVESET['bounds']) set or clear it: an entry's first demo walked through
-the converted moveset gives the press that reaches such a move (bound_hit).
+here, and title lines left empty. Tornados are no bounds in the converted moveset, so the tornado hit is not shown.
+TTT2's bound icon names the press that reaches one of the definition's bound moves (MOVESET['bounds']): an entry's
+first demo walked through the converted moveset (convert/movelist.py bound_hit).
 
 Written for this project (no third-party code).
 """
 import re
 import struct
 
-from ..convert.movelist import ARROW, KIND_TITLE, drop_empty_titles, summary, title_strings, write
+from ..convert.movelist import ARROW, KIND_TITLE, bound_hit, demo_presses, drop_empty_titles, summary, \
+    title_strings, write
 from . import uprops
 
 ENTRY_SIZE, DEMO_SIZE, INPUT_SIZE = 372, 24, 4
@@ -72,11 +73,7 @@ OPPONENT_ACTION = {0: 0, 3: 3, 5: 5, 7: 7, 8: 9, 10: 10, 13: 13}
 # the long wait after a throw or reversal (LONG_SECTIONS, a throw's buttons last) or when the opponent acts
 TAIL, LONG_TAIL = 120, 200
 THROWS = (0xC0, 0x30)                            # input buttons 1+3, 2+4 (1 0x80, 2 0x10, 3 0x40, 4 0x20)
-# a demo input's stick (0x10 u, 0x20 f, 0x40 d, 0x80 b) and buttons as a cancel row's direction and press bits (the
-# definition's bounds: bound_hit); the glyphs of the buttons (cmd_20..34)
-DEMO_STICK = {0: 0x20, 0x20: 0x40, 0x80: 0x10, 0x40: 0x4, 0x10: 0x100, 0x60: 0x8, 0xC0: 0x2, 0x30: 0x200, 0x90: 0x80}
-DEMO_BUTTONS = {0x80: 1, 0x10: 2, 0x40: 4, 0x20: 8}
-BUTTON_GLYPHS = range(20, 35)
+BUTTON_GLYPHS = range(20, 35)                    # the glyphs of the buttons (cmd_20..34)
 
 
 class LeftOut(Exception):
@@ -227,22 +224,6 @@ def _strings(x, tables):
 
 
 # ---------------------------------------------------------------------------------------------------- bound icons
-def demo_presses(records):
-    """[(stick, buttons, frame)] of a demo's presses (a cancel row's direction and press bits, the frame from 0);
-    None when the stick moves without a press (a dash or a motion input: not walked)."""
-    out, held, frame = [], 0, 0
-    for direction, buttons, frames, _ in records:
-        new = buttons & ~held
-        if new:
-            out.append((DEMO_STICK.get(direction & 0xF0, 0),
-                        sum(bit for demo, bit in DEMO_BUTTONS.items() if new & demo), frame))
-        elif direction:
-            return None
-        held = buttons
-        frame += max(1, frames)
-    return out
-
-
 def command_presses(command):
     """How many presses a command shows: its button glyphs, less the ones in brackets (a stance's way in: "During
     Sentai ([07][23], etc.) [23]")."""
@@ -250,27 +231,11 @@ def command_presses(command):
                if m.group(1) and int(m.group(1)) in BUTTON_GLYPHS)
 
 
-def bound_hit(tornado, bounds, presses, command):
-    """The hit TTT2's bound icon names: Tekken 8's tornado hit, unless the definition's bounds say otherwise.
-    bounds(presses) -> {press number: bound} for the presses that reach a move the definition makes a bound or not
-    (move_overrides.command_bounds); the presses of the demo before the command's own (a stance's way in) are not
-    counted. A tornado hit made no bound loses the icon; without one, the first press made a bound gets it."""
-    if not presses:
-        return tornado
-    before = len(presses) - command_presses(command)
-    if before < 0:
-        return tornado
-    marks = {n - before: bound for n, bound in bounds(presses).items() if n > before}
-    if marks.get(tornado) is False:
-        tornado = 0
-    return tornado or min((n for n, bound in marks.items() if bound), default=0)
-
-
 # ---------------------------------------------------------------------------------------------------- converting
 def convert(mvl, store, log=print, texts_by_language=None, bounds=None):
     """The TTT2 command list (MVLT bytes) of a Tekken 8 command list `mvl` (its saved bytes), its texts read from
     the store (or given: {language: {key: text}}); None when there is none to make. bounds: the definition's bound
-    moves for the bound icons (bound_hit; move_overrides.command_bounds), None: Tekken 8's tornados only."""
+    moves for the bound icons (bound_hit; move_overrides.command_bounds), None: no icons."""
     try:
         entries, demos, inputs = read(mvl or b'')
     except ValueError as e:
@@ -327,11 +292,11 @@ def convert(mvl, store, log=print, texts_by_language=None, bounds=None):
                 wait -= 255
             out_demos.append((setup, len(converted), len(out_inputs)))
             out_inputs.extend(converted)
-        tornado = (x['icons'] >> 8) & 0xFF
+        hit = 0
         if bounds is not None and own and x['kind'] == KIND_MOVE:
-            tornado = bound_hit(tornado, bounds, demo_presses(rows[0]), tables[ENGLISH].get(x['keys'][1]))
+            hit = bound_hit(bounds, demo_presses(rows[0]), command_presses(tables[ENGLISH].get(x['keys'][1])))
         out.append(dict(strings=strings, demo=first, count=len(own), kind=x['kind'], demo_kind=x['demo_kind'],
-                        icons=(0, tornado << 8)))
+                        icons=(0, hit << 8)))
     kept, dropped['empty title lines'] = drop_empty_titles(out)
     if not any(x['kind'] != KIND_TITLE for x in kept):
         log('command list: nothing TTT2 can show: none made')

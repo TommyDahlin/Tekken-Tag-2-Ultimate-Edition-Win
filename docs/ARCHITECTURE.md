@@ -973,7 +973,9 @@ tiger, an actor of its own in Tekken 7) joins the skeleton as extra bones
 with its meshes, its animations (decoded from Unreal's variable-key
 compression) become part-3 animations and the moves that summon it play
 them; mechanics TTT2 lacks (Rage
-Arts and Drives, power crush armour) are left out, and Screw becomes Bound.
+Arts and Drives, power crush armour, screws) are left out, and the moves
+that bound are the definition's (Tekken 7's after the Tekken 7 Bound Mod):
+they get TTT2's bound entry and Tag Assault twins.
 The donor's intros and win poses stay (their camera animations end the
 intro and the win screen) and play the fighter's animations. The command
 list is converted from Tekken 7's (both games keep an MVLT

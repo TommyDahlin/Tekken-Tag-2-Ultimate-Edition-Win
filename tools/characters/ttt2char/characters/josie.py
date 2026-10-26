@@ -79,6 +79,8 @@ VOICE_PREFIX = 'mu'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[JOSIE]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Ba_t_srp00', 'Co_jplk00F', 'Mu_623lrp', 'Mu_S_lp'), True),
     'drop_moves': r'^Ba_Direct$',
     'direct': [(r'^(ju|mk)_s', 'anim', ['mu_s%02d' % k for k in range(4)]),     # the donor's intros -> her
                (r'^ju_w', 'anim', ['mu_w%02d' % k for k in range(3)])],         # win poses

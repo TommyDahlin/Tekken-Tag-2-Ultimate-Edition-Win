@@ -133,7 +133,8 @@ MOVESET = {
     # tag combos (convert/tagcombo.py) besides her launchers: Moon Glide 3,3 (its hit on a standing opponent is no
     # launch; until 2026-10-26 it tagged out with Jun's Ju_s_tlkChg animation, now with its own)
     'tag_combos': {'Vp_66lklk': True},
-    'bounds': {'Vp_6rklkrk': False, 'Vp_rk00': False, 'Vp_shoryulprk': False},  # Moon Glide 3,4 (Helical Flow)
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Vp_4lprprk', 'Vp_4lrp2', 'Vp_9lrp2', 'Vp_9rkrp', 'Vp_shoryuC'), True),
     # Replace T7 extended-point references with native arm capsules. The
     # original 0x8213 parameters identify hand 13 (Storm) / 9 (Tempest).
     'hitboxes': {

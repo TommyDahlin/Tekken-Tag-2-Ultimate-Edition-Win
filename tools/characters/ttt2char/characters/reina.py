@@ -94,8 +94,8 @@ MOVESET = {
     'direct': [(r'^Ju_sKAM00_$', 'move', ['Zbr_sKAM00_']),                      # Jun's stance -> hers
                (r'^(ju|mk)_s', 'anim', ['zbr_s%02d' % k for k in range(3)]),    # intros
                (r'^ju_w', 'anim', ['zbr_w%02d' % k for k in range(3)])],        # win poses
-    # TTT2 bounds besides her Tekken 8 tornados (which convert to bounds by themselves): an air hit slams the
-    # opponent into the floor once per juggle (convert/move_overrides.py). d+2 Tecchuu-ate, f+4 Kamadhatu Splits
+    # TTT2 bounds (Tekken 8 has none, and its tornados do not become any): an air hit slams the opponent into the
+    # floor once per juggle (convert/move_overrides.py). d+2 Tecchuu-ate, f+4 Kamadhatu Splits
     # Kick, the same kick out of a dash (Zbr_66RK: f,f+4 by the donor's dash rows; Tekken 8's after a Heat Dash), and
     # d/f+1,2's second hit (Zbr_3LPRP)
     'bounds': {'Zbr_2RP': True, 'Zbr_6RK': True, 'Zbr_66RK': True, 'Zbr_3LPRP': True},

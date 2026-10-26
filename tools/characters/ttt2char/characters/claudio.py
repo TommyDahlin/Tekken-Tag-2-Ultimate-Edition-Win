@@ -77,6 +77,9 @@ VOICE_PREFIX = 'it'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[CLAUDIO]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('It_4lklk', 'It_4rklkrp', 'It_4rklkrpn', 'It_66rprp', 'It_chest', 'It_lrp2', 'It_lrp2n',
+                             'It_rk00F', 'It_rplp', 'It_spam'), True),
     'drop_moves': r'^It_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['it_s%02d' % k for k in range(4)]),     # Lars's intros -> his
                (r'^la_w', 'anim', ['it_w%02d' % k for k in range(3)])],         # win poses

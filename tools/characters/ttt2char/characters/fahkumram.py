@@ -87,7 +87,9 @@ MOVESET = {
     # with Heihachi's EWGF exit animation, now with its own)
     'tag_combos': {'Nc_66rklkrp': 'air'},
     'air_reaction_reference': 40,  # Jinpachi u+4, airborne reaction
-    'bounds': {'Nc_66rklp': True, 'Nc_3rplp': True},
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Nc_2lp', 'Nc_2lrk', 'Nc_3rklklk', 'Nc_3rplp', 'Nc_66rklp', 'Nc_WK00F',
+                             'Nc_jplp00F'), True),
     'name': '[FAHKUMRAM]',
     # Preserve Fahk's running 3 (ncss_mach) and d+4 (ncss_2rk), despite generic names.
     'own_moves': r'^(Co_runlk00|Co_t_srk00)$',

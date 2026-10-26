@@ -53,7 +53,7 @@ class Bounds(Base):
         self.assertEqual(self.c.stats['explicit bound enabled'], 1)
 
     def test_one_bound_entry(self):
-        """A tornado already converted to a bound keeps one bound entry."""
+        """A move with a bound entry already keeps one."""
         i = self.move('Zbr_4RK', (self.r467, 20, self.bound), (self.r466, 20, self.air), (self.never, 20, self.ground))
         self.c.defn.MOVESET['bounds'] = {'Zbr_4RK': True}
         move_overrides.apply(self.c)

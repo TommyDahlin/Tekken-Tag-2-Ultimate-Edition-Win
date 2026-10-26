@@ -141,6 +141,8 @@ VOICE_PREFIX = 'ka'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', 42), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[KAZUMI]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Ka_1lrp', 'Ka_3lprp', 'Ka_66rk', 'Ka_6lrklk', 'Ka_9lkrklp', 'Ka_lkrp'), True),
     # her own moves that are not converted (besides Rage Arts and story moves): customisation and story
     # variants, and her round-start move Ka_Direct (the donor's is kept)
     'drop_moves': r'^kz_co|^kz_90|Ka_Direct|^ka_sp',
