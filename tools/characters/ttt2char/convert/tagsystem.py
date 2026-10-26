@@ -5,12 +5,14 @@ Tekken 7 has no tag, and TTT2 keeps its tag system in the movesets, as moves and
 * Tag Assault: a TTT2 bound move X (a hit condition on 467) has a cancel on the tag button during its startup into a
   twin XT: X with a hit condition on 468 in front (its reaction bounces the opponent for the partner) and a cancel on
   that hit into XDA, X's animation without a hit, whose properties bring the partner in (its Co_Change_Kam takes the
-  tag-in kind 11) while it returns to the stance. The converter makes Tekken 7's screws bounds but has no XT or XDA
-  to give them: add_tag_assault makes both, after the donor's own triples (assault_template).
-* Bounds: where TTT2 has a bound, Tekken 7 often has an air slam instead (the same move of Heihachi's in both games:
-  [614 airborne -> slam][614 -> air][default] in Tekken 7, [467 -> bound][466 -> air][default] in TTT2); the id maps
-  make the slam the bound reaction without the 467 test, so it bounds on every air hit (TTT2 has no such entry).
-  gated_slam gives such entries TTT2's shape.
+  tag-in kind 11) while it returns to the stance. The converter makes the definition's bound moves bounds
+  (move_overrides.py) but has no XT or XDA to give them: add_tag_assault makes both, after the donor's own triples
+  (assault_template).
+* Bounds: bound_shape gives the donor's bound entry and what its air hit plays once the bound is used. Where TTT2 has
+  a bound, Tekken 7 often has an air slam instead (the same move of Heihachi's in both games: [614 airborne -> slam]
+  [614 -> air][default] in Tekken 7, [467 -> bound][466 -> air][default] in TTT2); the id maps make the slam the bound
+  reaction without the 467 test, so it would bound on every air hit (TTT2 has no such entry): the converter plays the
+  air hit after a bound for it instead.
 * Tag Crash: a juggled fighter plays its reactions from the ATTACKER's moveset (sub_041570D8), and TTT2's landing
   reactions have a cancel on 2 + tag held, the partner in Rage, into the tag crash just before their tech (ukemi)
   rows, and one on tag into the plain tag-out after them. landing_template / add_landing_rows give the converted
@@ -152,19 +154,6 @@ def same_reaction(tables, a, b):
     if a is None or b is None:
         return False
     return tables['reactions'][a]['default'] == tables['reactions'][b]['default']
-
-
-def gated_slam(tables, entry, before, bound_req, bound_reaction, after_reaction, alone):
-    """A Tekken 7 air slam's hit-condition entry (converted: its 466 requirement list, the bound reaction) -> TTT2's
-    entries for it: [467 -> bound][the air entry], as TTT2 Heihachi's same moves have (alone: Tekken 7 has no air
-    entry after the slam (Negan's, Geese's, Noctis's): the air entry made, with the donor's reaction after a bound);
-    after a bound entry already in the list (`before`, the entries converted so far), only the air entry."""
-    if any(has(tables, e['req'], BOUND) for e in before):
-        return [dict(entry, reactions=after_reaction)]
-    out = [dict(entry, req=bound_req, reactions=bound_reaction)]
-    if alone:
-        out.append(dict(entry, reactions=after_reaction))
-    return out
 
 
 # ------------------------------------------------------------------------------------------------ Tag Assault
@@ -529,9 +518,69 @@ class TagStates:
                     self.exact[n][i in yes] += 1
             common.update({state_name(m.move_name(i)) for i in yes})
         self.common = {s for s, n in common.items() if n * STATE_SHARE >= len(movesets)}
+        self.movesets = movesets        # (TTT2's movesets: tagcombo.tagged_stems reads its tag combos from them)
 
     def __call__(self, name):
         e = self.exact.get(name)
         if e:
             return e[True] > 0 and e[True] >= e[False]
         return state_name(name) in self.common
+
+
+# ------------------------------------------------------------------------------------------------ idle variants
+STANCES = (0x8001, 0x8002)          # alias slots of the stance and the crouch
+
+
+def row_key(tables, aliases, c):
+    """What a cancel row does, whatever lists it sits in: direction, buttons, requirements, extradata value, frames,
+    target (a group by its index), option."""
+    extra = None if c['extradata'] is None else tables['cancel_extras'][c['extradata']]['value']
+    target = c['move_id'] if c['direction'] == M.GROUP else resolve(aliases, c['move_id'])
+    return (c['direction'], c['button'], tuple(reqs(tables, c['req'])), extra, c['win_start'], c['win_end'],
+            c['start_frame'], target, c['option'])
+
+
+def idle_variants(tables, aliases, first):
+    """{stance: [its idle variants]}: converted moves (index >= first) a stance (STANCES) goes to by itself (an
+    automatic row) that attack nothing, go back to it, and whose cancels are the stance's own (some, each of them in
+    the stance's list): Tekken 8's idle animations (Reina's Zbr_sKAM00_1 / _2, after two seconds and more of standing),
+    whose lists lack the donor's rows the stance got (its tag out, tag throws, CPU moves, ...)."""
+    moves = tables['moves']
+    out = {}
+    for slot in STANCES:
+        s = resolve(aliases, slot)
+        if s is None or s >= len(moves) or moves[s]['cancel'] is None:
+            continue
+        own = collections.Counter(row_key(tables, aliases, c) for c in cancels(tables, moves[s]['cancel']))
+        found = []
+        for c in cancels(tables, moves[s]['cancel']):
+            v = resolve(aliases, c['move_id']) if c['direction'] < M.LIST_END and c['direction'] != M.GROUP else None
+            if v is None or not is_automatic(c) or v < first or v >= len(moves) or v == s or v in found:
+                continue
+            x = moves[v]
+            if x['first_active'] or x['cancel'] is None or resolve(aliases, x['transition']) != s:
+                continue
+            rows = collections.Counter(row_key(tables, aliases, r) for r in cancels(tables, x['cancel'])
+                                       if r['direction'] != M.LIST_END)
+            if rows and not rows - own:         # (a list of the stance's rows: not an empty one, Claudio's
+                found.append(v)                 # It_practice_KAM_CS7 behind a row never taken)
+        if found:
+            out[s] = found
+    return out
+
+
+def share_stance(tables, aliases, first):
+    """Each idle variant (idle_variants) gets its stance's list, less the stance's rows into its idle variants (a
+    new list; the stance's own stays). -> how many moves changed."""
+    changed = 0
+    made = {}
+    for s, found in idle_variants(tables, aliases, first).items():
+        rows = [dict(c) for c in cancels(tables, tables['moves'][s]['cancel'])
+                if not (c['direction'] < M.LIST_END and c['direction'] != M.GROUP
+                        and resolve(aliases, c['move_id']) in found)]
+        if s not in made:
+            made[s] = write(tables, 'cancels', rows)
+        for v in found:
+            tables['moves'][v]['cancel'] = made[s]
+            changed += 1
+    return changed

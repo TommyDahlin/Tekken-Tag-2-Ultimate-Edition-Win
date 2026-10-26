@@ -84,7 +84,9 @@ VOICE_PREFIX = 'mz'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'direct_buffered_strings': ('Mz_t_srk00F',),
-    'bounds': {'Mz_jpWPF': True, 'Mz_rk01jpWPF': True, 'Mz_t_srk02F': True, 'Mz_t_srk03F': False},
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds, and Mz_jpWPF
+    'bounds': dict.fromkeys(('Mz_9RP', 'Mz_Shield2Atk', 'Mz_lk01B', 'Mz_rk01jpWPF', 'Mz_runWP', 'Mz_s_tlp01',
+                             'Mz_t_srk02Easy', 'Mz_t_srk02F', 'Mz_yokoRP', 'Mz_jpWPF'), True),
     'name': '[NOCTIS]',
     'drop_moves': r'^Mz_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['mz_s%02d' % k for k in range(5)]),     # the donor's intros -> his

@@ -48,8 +48,13 @@ and shaders are translated to Vulkan as it runs.
   title screen's logo says "Ultimate Edition" where it said "Wii U
   Edition", in the same brush lettering. All of it is made by the port
   from the Wii U game's own files.
-- **Position reset in Practice**, as in Tekken 8: 3 and + (Start) pressed
+- **Position reset in Practice**, as in Tekken 8: 3 and − (Select) pressed
   together put both fighters back where the stage put them.
+- **No forced input delay**: the Wii U game waits two frames (33 ms) after
+  reading a button before acting on it, in every mode (Cemu's "Reduce input
+  lag" graphic pack removes it too). The port leaves that wait out; the
+  launcher's Settings can put it back. Practice's own Input Delay setting
+  works either way.
 - **Installs like any other program**: `ttt2 --install` copies the game into
   a folder you choose and adds it to the application menu.
 - **Made to be modified**: every function of the game is a C++ function that
@@ -94,7 +99,7 @@ refuse a game whose executable is not the one they were built from.
   headers recent enough to define `VK_KHR_present_wait2` (mid-2025 or
   newer), OpenSSL 3, zstd and zlib; for the launcher also GTK 4.10 or newer
   (without it the launcher is left out) and MinGW (optional: the Tekken 7
-  helper is then built in).
+  and Tekken 8 helpers are then built in).
 
 On Arch Linux:
 
@@ -265,10 +270,17 @@ tick them; of a save folder you chose with `TTT2_SAVE_DIR`, only the game's
 own saves go). While the game runs, however it was started, Play, Update and
 Uninstall wait for it to end. The gear next to Play opens its **Settings**:
 whether the game starts fullscreen, the resolution it draws at, its 120
-frames per second, and its keyboard keys ([Playing](#playing)). Its
-Characters section shows where Steam has Tekken 7, or why it cannot be used, with **Add** per fighter and **Add All**, and Tekken 7's DLC
+frames per second, whether fighters wait the Wii U version's two frames
+before acting on a button, and its keyboard keys ([Playing](#playing)). Its
+Characters section shows where Steam has Tekken 7 and Tekken 8, or why one cannot be used, and a part for each game's
+fighters (the installed game's first), with **Add** per fighter: Tekken 7's with **Add All** and its DLC
 fighters in a list that opens, with those your Steam account owns and **Add
-All Owned**; **Remove** takes one out again.
+All Owned**; Tekken 8's (Reina) without Tekken 7 or any of its fighters. **Remove** takes one out again. A
+Tekken 8 fighter whose moves could not be saved from Tekken 8 (a game update its helper does not know yet, or
+nothing to run it hidden) is added with Heihachi's moves, says so and why, and is offered as an update once
+their own can be saved. What all added fighters share is made from each one's own game, so while one game is
+uninstalled its fighters stay in the game but no other can be added: the launcher says so, and offers to
+remove that game's fighters all at once.
 
 ```bash
 cmake --build build --target ttt2-launcher ttt2_kit
@@ -384,15 +396,17 @@ still opens the pause menu, a few frames later than before.
 
 The launcher's **Settings** also choose how the game starts: fullscreen or
 in a window, the resolution it draws at (Automatic, the default, is enough
-to cover your main display) and whether it shows 120 frames per second on
-displays of 100 Hz and more (on by default). They are kept in
-`~/.config/ttt2/display.ini` (`$XDG_CONFIG_HOME/ttt2/`), which can be
-edited by hand too:
+to cover your main display), whether it shows 120 frames per second on
+displays of 100 Hz and more (on by default) and whether fighters wait the
+Wii U game's two frames before acting on a button (off by default). They
+are kept in `~/.config/ttt2/display.ini` (`$XDG_CONFIG_HOME/ttt2/`), which
+can be edited by hand too:
 
 ```ini
 fullscreen = no             # yes or no
 resolution = auto           # auto, 1280x720, 1920x1080, 2560x1440, 3840x2160 or 5120x2880
 interpolation = yes         # yes or no (no: 60 frames per second)
+input_delay = no            # yes: two frames between a button press and the game acting on it, as on the Wii U
 ```
 
 The game reads it when it starts, so a change applies the next time. The
@@ -406,6 +420,7 @@ variables below win over it.
 | `TTT2_SCALE=1/1.5/2/3/4` | render scale: 1280x720 times this (default from `display.ini`, else from the display) |
 | `TTT2_FPS=60/120/180/240` | frames shown per second (default 120 on displays of 100 Hz and more, unless `display.ini` turns it off) |
 | `TTT2_FULLSCREEN=1` | start fullscreen (another value: in a window) |
+| `TTT2_INPUT_DELAY=0..15` | frames between a button press and the game acting on it (the Wii U game's own: 2; default from `display.ini`: 0) |
 | `TTT2_AUDIO=0` | no sound |
 | `TTT2_AUDIO_VOLUME=0..100` | volume in percent (default 100) |
 | `TTT2_SAVE_DIR=<folder>` | where saves go |
@@ -502,7 +517,8 @@ and hits with it, Noctis summons his swords, daggers, spear and shield for the
 moves that use them, Leroy's cane and Master Raven's sheathed katana are where
 they carry them, and the moves that hit with a weapon (Kunimitsu II's blades
 too) reach as far as the weapon. Left out for now: Rage Arts and Rage Drives,
-power crush armour (those moves are there, without it), Screw becomes Bound,
+power crush armour (those moves are there, without it), screws (a screw move
+juggles as it does in Tekken 7 once the screw is used),
 the weapons they take in hand only for some moves (Kunimitsu II's blades,
 Master Raven's drawn sword, Leroy's folding staff, Negan's knife), the weapons
 of Noctis's Rage Art, Katarina's and Leroy's sunglasses, and Gigas's back
@@ -515,30 +531,33 @@ system needs: they tag out (and have tag throws) while walking, dashing,
 stepping back, crouching or crouch walking, as Tekken Tag Tournament 2's own
 fighters do; press Tag during a bound move's startup (before it hits) for a
 Tag Assault, and their juggles give the Tag Crash input on landing (2+Tag
-with the partner in Rage). Many of Tekken Tag Tournament 2's bounds are
-slams in Tekken 7 that bounce on every air hit; those bound once per juggle,
-as Tekken Tag Tournament 2's own do (right column). Inputs in Tekken 7's
-notation (WR while rising, SS sidestep, BT back turned, FC full crouch):
+with the partner in Rage). Tekken 7 has no bound either: the bound moves are
+the ones the Tekken 7 Bound Mod gives each fighter (and Akuma's d/f+1+2 and
+Noctis's jump 1+2), and each bounds once per juggle, as Tekken Tag Tournament
+2's own do. Screws are no bounds, and neither are Tekken 7's slams outside
+that list: they play the air hit Tekken Tag Tournament 2 plays once a
+juggle's bound is used. Inputs in Tekken 7's notation (WR while rising, WS
+while standing up, SS sidestep, BT back turned, FC full crouch):
 
-| Fighter | Bound moves | Slams in Tekken 7, bounds here |
-|---|---|---|
-| Kazumi | f+4; b+2; 3,1; u/f+3,4,3; b,f+2,1,4; WR 4,4 | d/f+1,2; d/b+1+2; f+3+4,3; u/f+3,4,1 |
-| Lucky Chloe | 1+2; 1,2,1+2; f+2,1+2; BT 1+2; d/f+3,3; b+3; FC d/f+2; d/f+2,4,3,1; 10-hit string | 1,2,2; f+2,2; BT 3,3+4; d/f+3,2; f,f,f+3; b+2 |
-| Eliza | 4; f,f,f+1; b+3,1; d,d/b,b+1; Moon Glide 1,4 / 3,4 | u/f+4,2; b+1,2 |
-| Claudio | f+2,2; 4,3; 2,1,2; f+3; b+1; b+4,1; WR 1,2 | b+1+2; b+4,3,2; b+3,3; f,F+2,2; jump 2 |
-| Akuma | f+4; 4,3; Hyakkishu (f,d,d/f+3 or 4) 3 | Hyakkishu 2; f,f,f+3+4 |
-| Gigas | f+2,f+1; d/f+2,1; d/b+3,2; Golem Set Up 4,1; SS 2 | f+2,1,1; d+2; b+1+2; WR 4,2; d/f+4,1+2 |
-| Josie | 3,3; b+1,1; f+2,3,4; f,F+4; 1,2,d+4,4; 2,d+4,4; 3+4; f,n,d,d/f+1,3 | jump f+3; d+2; d/f+4,1; b+3+4,f,1+2 |
-| Katarina | 2,2; 3,4 (also WR); d/f+2,4; f,F+4; Harrier d/f+2,3; f,F+2,4 | f+4,2; f+4,u/f+3; f,F+3; d+1; u/f+3+4; b+4,3+4; f,f,f+3+4; 1+2,1,3; 3,3,3,3,3 |
-| Master Raven | b+4,4; d/f+2,3; b+2,4,2; BT f+2,4,2; 2,4; f+1+2; 4,3,3; WR 3+4; BT b+3; BT f+4,3 | b+1; b+4,b+4; BT 3,4,4; jump f+3+4 |
-| Shaheen | 4,3; f+2,4,4; f+4; d/f+3; Stealth Step 4,1 | 4,4; b+1; f,f,f+3+4; Stealth Step 3 |
-| Fahkumram | 3,4,4; f+3,2,4,4; WR 2,4,4; 4,3,1; 1,2,4,3,1; 2,4,3,1; d+3,4,3,1; f,F+4; b+3; d/f+1,4 | b,f+3+4; d/f+2,1; d/f+4,3,3 |
-| Leroy | 1,2,3; f+4,4; b+3; b+4; Hermit 2,1; Hermit f+1 | Hermit b+1; d+1+2 |
-| Lidia | 1,2,3; 1,2,4,4; 4,3; f+4,3,4; d/f+4,3; d/f+4,4; d/f+3+4; d+3,4; b+4,4,4; b+3+4,3; u/f+4; SS 4; Cat Foot 3; 10-hit string | f+3+4,4; f+4,3,1; d+1+2 |
-| Kunimitsu II | 1,1,1; 3,4; Katon 4,2; f+2,3; Setsunagake 1,2,1; f,n,d,d/f+2; f+3,2; f+3,1,2; f+3+4; b+2; WR 2,4 | d,d/f,f+2; f,F+4,2; d/f+1,2,2; d+1+2; 1,1,4; Setsunagake 1,2,4; f+3,1,2,4 |
-| Negan | d/b+1+2 (also held); d/f+1,1,2; b+1,2; SS 2; Intimidation 1,2 / 1+2 | f+1,2,1+2; 2,2,2,2; b+2,2; b+1+2; d/f+3+4,1,2; Intimidation 2,3 |
-| Geese Howard | 4; d/f+2; b+4,4; WR 3; f,d,d/f+1 / +2 | d,d/b,b+2,3 (and its EX version) |
-| Noctis | 1,2,1+2; 2,2,f+2; 1+2; f+4,2; d/f+1,4; d/f+4,2,4; d/f+1+2; d+2,2; u/f+4; u+4; f,F+1+2; WR 2,2 | u+2; u/f+2; jump 1+2; b+2+3; b+1+4; d+4,1,1+2; d/f+4,2; f,f,f+1+2 |
+| Fighter | Bound moves |
+|---|---|
+| Kazumi | d/b+1+2; d/f+1,2; f,F+4; 3,2; u/f+3,4,1; Fearless Warrior 3 |
+| Lucky Chloe | 1,2,2; f+2,2; d/f+3,2; b+2; f+4,4; u+3+4; BT 3,3+4; Left Twist 3 |
+| Eliza | f,F+4,2; b+1,2,4; b+1+2; d,d/b,b+3; EX Moon Glide 1+2 |
+| Claudio | f+2,1; f+4; f+1+2,1+2; b+3,3; b+4,3,2; b+1+2; u/f+2; f,F+2,2 |
+| Akuma | f+1+2; d/f+1+2; d/f+1,2; f,F+4; WS 4,4; Hyakkishu (f,d,d/f+3 or 4) 2 |
+| Gigas | d+2; f+2,1,1; f+1+2; d/f+1+2; d/f+4,1+2; b+4; b+1+2; WS 4,2; 10-hit string (its 8th hit) |
+| Josie | d+2; u/f+3; f,n,d,d/f+1+2; Switch Stance 1 |
+| Katarina | 1,1,1; 1,1,3; 3,3,3,3,3; d+1; f+3; f+1+2; b+4,1+2; u/f+4,4; u/f+3+4; f,f,f+3; Harrier 2 |
+| Master Raven | b+1; b+1+2,2; u/b+1,2; u+3,d+3,3; u/f+3+4,f+4,3; FC d/f+3+4,4; BT f+2,3; Haze 4 |
+| Shaheen | 4,4; b+1; b+3; f+3+4; u/f+3 |
+| Fahkumram | d+1; d+3+4; f+3+4; u/f+1; d/f+2,1; d/f+1,4,1; d/f+4,3,3; f,F+4,1 |
+| Leroy | d+1+2; u/f+3+4,1+2; Hermit f+4; Hermit b+1 |
+| Lidia | d+1; b+1,2; f+4,3,1; u/f+3; SS 2; Cat Foot Stance I 4; Pouncing Tiger, Stalking Wolf 4 |
+| Kunimitsu II | d+1; d/f+1+2; d/f+1,2,2; f,F+4,2; d,d/f,f+2; WS 1,1; Setsunagake 1,2,3 |
+| Negan | d+2; 1,2,2; b+2,2; b+1+2; d/f+3,1,2; Intimidation 2; Intimidation 2+3 |
+| Geese Howard | 1,2,1; b+2; d/f+3,4,2; d,d/b,b+2,3 (and its EX version) |
+| Noctis | WS 1,2; WR 1+2; d/f+4,2,2; d+4,1,1+2; b+3,1; b+1+4; u/f+2; SS 2; jump 1+2; Jump Peak 1+2 |
 
 ## How it works
 
@@ -643,7 +662,13 @@ built into the `ttt2` program). The port also links SDL3 (zlib), shaderc
   whose research documented the Tekken 7 and TTT2 moveset layouts, their
   animations and what their requirement and property ids mean, which the
   character importer builds on (its movesets are in TKMovesets2's .tkmvst
-  layout, which it can also read);
+  layout, which it can also read); the Tekken 7 Bound Mod, whose choice of
+  bound moves the added Tekken 7 fighters have;
   [UE Viewer](https://github.com/gildor2/UEViewer) and
   [CUE4Parse](https://github.com/FabianFG/CUE4Parse), for Tekken 7's Unreal
   Engine 4.14 packages. The importer's code is its own.
+- [Excentrian](https://github.com/Excentrian), who designed the title
+  screen's "ULTIMATE EDITION" subtitle
+  ([#9](https://github.com/Petexy/Tekken-Tag-2-Ultimate-Edition/issues/9)):
+  the port letters it after that design, its M and A from Excentrian's
+  outlines.

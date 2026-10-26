@@ -80,7 +80,12 @@ VOICE_PREFIX = 'ab'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[SHAHEEN]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Ab_4lk', 'Ab_4lp', 'Ab_6lrk2', 'Ab_jplk00F', 'Ab_rkrk'), True),
     'drop_moves': r'^Ab_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['ab_s%02d' % k for k in range(3)]),     # the donor's intros -> his
                (r'^la_w', 'anim', ['ab_w%02d' % k for k in range(3)])],         # win poses
+    # tag combo on his d/f+2 (Tekken 7 names it generically, Co_t_srpF: TTT2 gives its fighters' own d/f+2 none,
+    # 0 of 18, but it is his main launcher, as the other added fighters' own-named d/f+2)
+    'tag_combos': {'Co_t_srpF': True},
 }

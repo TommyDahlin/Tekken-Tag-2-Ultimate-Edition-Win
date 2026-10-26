@@ -124,6 +124,8 @@ VOICE_PREFIX = 'dc'           # her intro and win lines' events in Tekken 7's ba
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', 42), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[CHLOE]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Dc_1lklk', 'Dc_3lkrp', 'Dc_4rp', 'Dc_8lrk2', 'Dc_R_lklrk', 'Dc_lprprp', 'Dc_rkrk'), True),
     'drop_moves': r'^Dc_Direct$',
     'direct': [(r'^Ju_sKAM00_$', 'move', ['Dc_sKAM00_']),                       # Jun's stance -> hers
                (r'^(ju|mk)_s', 'anim', ['dc_s%02d' % k for k in range(3)]),     # intros

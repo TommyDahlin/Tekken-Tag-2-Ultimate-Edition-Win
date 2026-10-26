@@ -76,6 +76,9 @@ VOICE_PREFIX = 'cz'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[GIGAS]',
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
+    'bounds': dict.fromkeys(('Cz_10comb8', 'Cz_2rp', 'Cz_3rk4lrp', 'Cz_4lrp', 'Cz_4rk', 'Cz_6lrp2', 'Cz_6rplplp',
+                             'Cz_s_trkrp', 'Cz_zutuki'), True),
     'drop_moves': r'^Cz_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['cz_s%02d' % k for k in range(3)]),     # the donor's intros -> his
                (r'^la_w', 'anim', ['cz_w%02d' % k for k in range(3)])],         # win poses

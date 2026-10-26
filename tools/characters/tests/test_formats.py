@@ -214,17 +214,21 @@ class Voice(unittest.TestCase):
 
 
 class CommandList(unittest.TestCase):
-    def test_convert(self):
+    @staticmethod
+    def mvlt(commands=None, icons=0, inputs=(bytes([0x20, 0x80, 3, 1]),)):
+        """A Tekken 7 MVLT: a move (its 12 commands, icons and one demo of `inputs`), then a drill."""
         strings = bytearray(b'\0')                      # offset 0: the empty string
         def put(s):
             strings.extend(s.encode() + b'\0')
             return len(strings) - len(s.encode()) - 1
-        names = [put('jp'), put('Move'), put('reading'), put('Move')] + [put('cmd%d' % i) for i in range(12)]
+        commands = commands or ['cmd%d' % i for i in range(12)]
+        names = [put('jp'), put('Move'), put('reading'), put('Move')] + [put(c) for c in commands]
         so = 0x20
         names = [so + o for o in names]
         entry = bytearray(372)
         struct.pack_into('<16I', entry, 0, *names)
         struct.pack_into('<HHHH', entry, 0x44, 0, 1, 0, 1)
+        struct.pack_into('<I', entry, 0x14C, icons)
         drill = bytearray(372)
         struct.pack_into('<16I', drill, 0, *names)
         struct.pack_into('<HHHH', drill, 0x44, 0xFFFF, 0, 15, 0)
@@ -233,16 +237,39 @@ class CommandList(unittest.TestCase):
         eo = so + len(strings)
         do = eo + 2 * 372
         io = do + 24
-        demo = struct.pack('<8HIHH', 0, 2000, 0, 0, 0, 0, 0, 1, 0, 0, 0)
-        m = struct.pack('<4sHHIIIIII', b'MVLT', 1000, 2, 2, 1, so, eo, do, io) + bytes(strings) + bytes(entry) + \
-            bytes(drill) + demo + bytes([0x20, 0x80, 3, 1])
-        out = movelist.convert(m, log=lambda s: None)
+        demo = struct.pack('<8HIHH', 0, 2000, 0, 0, 0, 0, 0, len(inputs), 0, 0, 0)
+        return struct.pack('<4sHHIIIIII', b'MVLT', 1000, 2, 2, 1, so, eo, do, io) + bytes(strings) + bytes(entry) + \
+            bytes(drill) + demo + b''.join(inputs)
+
+    def test_convert(self):
+        out = movelist.convert(self.mvlt(), log=lambda s: None)
         magic, ver, _, n, nd, so2, eo2, do2, io2 = struct.unpack_from('>4sHHIIIIII', out, 0)
         self.assertEqual((magic, ver, n, nd), (b'MVLT', 2, 1, 1))
         first = struct.unpack_from('>12I', out, eo2)
         self.assertEqual(out[so2 + first[1]:].split(b'\0')[0], b'Move')
         self.assertEqual(out[so2 + first[4]:].split(b'\0')[0], b'cmd1')     # en <- Tekken 7's [5]
         self.assertEqual(out[io2:io2 + 4], bytes([0x80, 0x20, 3, 1]))          # buttons, direction swapped
+
+    def test_bound_icon(self):
+        """The icon names the press the definition's bounds mark (convert/move_overrides.py command_bounds), not
+        Tekken 7's screw hit; the presses of a stance's way in, before the command's own, are not counted."""
+        def icons(m, bounds=None):
+            out = movelist.convert(m, log=lambda s: None, bounds=bounds)
+            eo = struct.unpack_from('>I', out, 0x14)[0]
+            return struct.unpack_from('>HH', out, eo + 84)
+        two = '\ue016'                                   # the glyph of 2 (U+E014 + mask)
+        d2 = self.mvlt(['', 'During Stance %s (or %s)' % (two, '\ue015')] + [''] * 10, icons=0x100,
+                       inputs=[bytes([0x40, 0x10, 1, 1]), bytes([0, 0, 1, 0]), bytes([0, 0x10, 1, 1]),
+                               bytes([0, 0, 1, 0])])
+        self.assertEqual(movelist.command_presses('During Stance %s (or %s)' % (two, '\ue015')), 1)
+        self.assertEqual(icons(d2), (0, 0))                                     # the screw: no bound
+        walked = []
+        def bounds(presses):
+            walked.append(presses)
+            return {2: True}
+        self.assertEqual(icons(d2, bounds), (0, 0x100))                         # its 1st press, after d+2
+        self.assertEqual(walked, [[(0x4, 2, 0), (0x20, 2, 2)]])
+        self.assertEqual(icons(d2, lambda presses: {1: True}), (0, 0))          # the way in's press
 
 
 class Colours(unittest.TestCase):
@@ -262,6 +289,27 @@ class Colours(unittest.TestCase):
         self.assertTrue(np.allclose(g[e2[1] - 1, e2[0] - 1, 1], q2, atol=1e-6))
         xml = colours.palette_xml(texts[0], 61, {51: e1})
         self.assertIn('<Color id="61" palette="51" x="%d" y="%d" s="9" />' % e1[:2], xml)
+
+    def test_fit_max_error(self):
+        """White stripes changing like the purple around them (both to lime) cannot be the purple group's colour:
+        with max_error they are left out of the layer and the rest is fitted without them."""
+        c1, c2 = np.zeros((10, 10, 3)), np.zeros((10, 10, 3))
+        c1[:5], c2[:5] = (0.3, 0.2, 0.6), (0.5, 0.65, 0.05)          # purple -> lime
+        c1[5:9], c2[5:9] = (0.15, 0.15, 0.15), (0.6, 0.6, 0.6)       # dark grey -> light grey
+        c1[9], c2[9] = (0.9, 0.9, 0.9), (0.55, 0.7, 0.1)             # white stripes -> lime
+
+        def worst_1p(f):
+            (_, a, _, _), (_, b, _, _) = f['groups']
+            got = 2 * f['shade'][..., None] * (np.array(a) + (np.array(b) - a) * f['b'][..., None])
+            return np.where(f['alpha'] > 0, np.abs(np.clip(got, 0, 1) - c1).max(-1), 0).max(1)
+
+        grid = np.zeros((32, 64, 3, 3), '>f4').tobytes()
+        before = colours.fit(c1, c2, colours.Palette(grid, []))
+        self.assertGreater(worst_1p(before)[9], colours.MAX_ERROR)   # (as Tekken 7 fighters keep it)
+        f = colours.fit(c1, c2, colours.Palette(grid, []), max_error=colours.MAX_ERROR)
+        self.assertEqual(f['alpha'][9].sum(), 0)
+        self.assertTrue((f['alpha'][:9] == 1).all())
+        self.assertLess(worst_1p(f).max(), 1 / 255)
 
 
 class Lettering(unittest.TestCase):
