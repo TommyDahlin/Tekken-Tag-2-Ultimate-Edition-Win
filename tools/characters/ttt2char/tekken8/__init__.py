@@ -24,6 +24,7 @@ The model, its materials and the fighter's voice:
     wwise.py      Wwise sound data (bank version 145): one small bank per event, its audio as loose files
     voice.py      a fighter's voice clips by kind, for convert/voice.py
 The moveset (the files autodump.py saves):
+    windows.py    native Windows Steam discovery and importer-owned Tekken 8 sessions
     autodump.py   the movesets (in tkdata.bin) as the running game's own reader hands them over: Tekken 8 run
                   hidden by dump_tekken8.py and import_character.py (t8helper next to it), the files saved under
                   ~/.local/share/ttt2

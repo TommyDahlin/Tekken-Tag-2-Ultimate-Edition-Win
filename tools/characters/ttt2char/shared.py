@@ -72,12 +72,17 @@ def name_calls(source_of, archives, fighters, log=None):
 
 def build(source_of, archives, rpx, folder, definitions, log=None):
     """Writes <folder>/shared/ for the installed packs; definitions: {code: definition}; source_of(d): fighter d's
-    source (source.Sources: a Tekken 7 and a Tekken 8 fighter are read from their own games). -> the fighters it
-    has."""
+    source (source.Sources: a Tekken 7 and a Tekken 8 fighter are read from their own games). The select grid gets
+    its new top row only while a fighter's place is past the title's grid's room (pack.needs_new_row; grid.ini
+    `grid = rows` tells the port). -> the fighters it has."""
     fighters = fighters_of(folder, definitions)
     files = {}
     if fighters:
-        files.update(art.shared_files(source_of, archives, rpx, [(slot, d) for slot, d, _ in fighters], log=log))
+        new_row = pack.needs_new_row(slot for slot, _, _ in fighters)
+        files.update(art.shared_files(source_of, archives, rpx, [(slot, d) for slot, d, _ in fighters], log=log,
+                                      new_row=new_row))
+        if new_row:
+            files['grid.ini'] = b'grid = rows\n'
         files.update(palettes(archives, fighters))
         files.update(name_calls(source_of, archives, fighters, log=log))
     # (A link put there goes, not what it leads to: shared/ is made anew each time, here.)

@@ -8,6 +8,7 @@
 #include "host/audio.h"
 #include "host/window.h"
 #include "install.h"
+#include "title/controllers.h"
 #include "title/presentation.h"
 #include "title/roster.h"
 
@@ -87,13 +88,20 @@ int main(int argc, char** argv) {
         usage(argv[0]);
         return 2;
     }
+    install::configure_user_paths();
     install_fault_handler();
     vfs::open_game(game);
     if (const char* save = std::getenv("TTT2_SAVE_DIR")) {
         vfs::set_save_root(save);
     } else {
+#ifdef _WIN32
+        const char* data = std::getenv("LOCALAPPDATA");
+        if (!data) fatal("LOCALAPPDATA is unavailable; set TTT2_SAVE_DIR");
+        vfs::set_save_root(std::filesystem::path(data) / "TTT2Ultimate/save");
+#else
         const char* home = std::getenv("HOME");
         vfs::set_save_root(std::filesystem::path(home ? home : ".") / ".local/share/ttt2/save");
+#endif
     }
     const auto rpx = vfs::read_whole("/vol/code/Tekken.rpx");
     if (!rpx) fatal("the game source has no code/Tekken.rpx");
@@ -104,6 +112,7 @@ int main(int argc, char** argv) {
     os::init_heaps(image.data_end);
     init_data_imports();
     title::prepare_presentation();
+    title::prepare_controllers();
     title::prepare_roster();
     std::fprintf(stderr, "ttt2: loaded image, entry 0x%08X, %zu/%zu guest entries compiled\n",
                  image.entry_point, cafe_program_info.compiled_entries,

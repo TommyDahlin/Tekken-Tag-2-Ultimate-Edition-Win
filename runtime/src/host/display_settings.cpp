@@ -1,6 +1,6 @@
 #include "host/display_settings.h"
 
-#include <sys/stat.h>
+#include "host/file_io.h"
 
 #include <algorithm>
 #include <array>
@@ -208,6 +208,10 @@ std::string format(const Settings& settings) {
 }
 
 fs::path file_path() {
+#ifdef _WIN32
+    if (const char* data = std::getenv("LOCALAPPDATA"); data && *data)
+        return fs::path(data) / "TTT2Ultimate/config" / "display.ini";
+#endif
     const char* config = std::getenv("XDG_CONFIG_HOME");
     return (config && *config == '/' ? fs::path(config) : home() / ".config") / "ttt2" / "display.ini";
 }
@@ -215,14 +219,13 @@ fs::path file_path() {
 Loaded load(const fs::path& file) {
     Loaded loaded;
     const std::string name = file.string();
-    const std::string native = file.string();
     const auto unusable = [&](const std::string& why) {
         loaded.error = why;
         loaded.log.push_back("display: defaults (" + why + ")");
         return loaded;
     };
-    struct stat st{};
-    if (::stat(native.c_str(), &st) != 0) {
+    host::io::Stat st{};
+    if (host::io::stat(file, &st) != 0) {
         const int error = errno;
         if (error == ENOENT || error == ENOTDIR) {
             loaded.log.push_back("display: defaults (no " + name + ")");

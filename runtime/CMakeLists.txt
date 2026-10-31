@@ -1,10 +1,17 @@
-find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+set(TTT2_INSTALL_SOURCE src/install.cpp)
+if(NOT WIN32)
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+endif()
 find_package(ZLIB REQUIRED)
 
-set(cafe_runtime_sources
+# Linked as objects, not an archive: strong import implementations here must
+# replace the weak defaults in the generated imports.cpp, and the export
+# registrations must not be dropped by the linker.
+add_library(cafe_runtime OBJECT
     src/memory.cpp
     src/loader.cpp
     src/dispatch.cpp
+    src/diagnostics.cpp
     src/exports.cpp
     src/sysmem.cpp
     src/os/thread.cpp
@@ -28,9 +35,11 @@ set(cafe_runtime_sources
     src/os/hardware.cpp
     src/vfs.cpp
     src/wua.cpp
+    ${TTT2_INSTALL_SOURCE}
     src/gpu/command_processor.cpp
     src/gpu/display.cpp
     src/gpu/null_backend.cpp
+    src/gpu/overlay.cpp
     src/gpu/replacements.cpp
     src/gpu/shader_dump.cpp
     src/gpu/tiling.cpp
@@ -38,6 +47,7 @@ set(cafe_runtime_sources
     src/gpu/vulkan/draw.cpp
     src/gpu/vulkan/formats.cpp
     src/gpu/vulkan/interpolate.cpp
+    src/gpu/vulkan/overlay.cpp
     src/gpu/vulkan/present.cpp
     src/gpu/vulkan/png.cpp
     src/gpu/vulkan/renderer.cpp
@@ -57,28 +67,26 @@ set(cafe_runtime_sources
     src/gx2/state.cpp
     src/gx2/surface.cpp
     src/gx2/texture.cpp
+    src/title/framedata.cpp
+    src/title/gauge.cpp
     src/title/input_delay.cpp
+    src/title/controllers.cpp
     src/title/practice.cpp
     src/title/presentation.cpp
     src/title/roster.cpp)
-
-if(WIN32)
-    list(APPEND cafe_runtime_sources src/diagnostics_windows.cpp src/install_windows.cpp)
-else()
-    list(APPEND cafe_runtime_sources src/diagnostics.cpp src/install.cpp)
-endif()
-
-# Linked as objects, not an archive: strong import implementations here must
-# replace the weak defaults in the generated imports.cpp, and the export
-# registrations must not be dropped by the linker.
-add_library(cafe_runtime OBJECT ${cafe_runtime_sources})
 target_include_directories(cafe_runtime PUBLIC include PRIVATE src)
 target_compile_features(cafe_runtime PUBLIC cxx_std_20)
 find_package(Vulkan REQUIRED)
 find_package(SDL3 REQUIRED CONFIG)
 # GLSL -> SPIR-V at run time.
-find_library(SHADERC_LIBRARY NAMES shaderc_shared REQUIRED)
-target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title OpenSSL::Crypto ZArchive::zarchive amd_addrlib cafe_latte
+if(WIN32)
+    target_include_directories(cafe_runtime PRIVATE ${CMAKE_SOURCE_DIR}/third_party/shaderc/libshaderc/include)
+    target_link_libraries(cafe_runtime PUBLIC bcrypt winpthread ole32 shell32 uuid)
+else()
+    find_library(SHADERC_LIBRARY NAMES shaderc_shared REQUIRED)
+    target_link_libraries(cafe_runtime PUBLIC OpenSSL::Crypto)
+endif()
+target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title ZArchive::zarchive amd_addrlib cafe_latte
     Vulkan::Vulkan SDL3::SDL3 ${SHADERC_LIBRARY})
 # Vulkan structures are initialised with only their sType.
 target_compile_options(cafe_runtime PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
@@ -90,6 +98,7 @@ add_library(cafe_title STATIC
     src/title/draw.cpp
     src/title/font.cpp
     src/title/image.cpp
+    src/title/pictures.cpp
     src/title/text.cpp
     src/title/title_screen.cpp)
 target_include_directories(cafe_title PUBLIC src)

@@ -34,6 +34,7 @@ import numpy as np
 from ..movesets import REACTION_MOVE_FIELDS, TABLE_ORDER, TTT2
 from ..ttt2 import animation, motbin, motion
 from . import arcs
+from . import gauge as G
 from . import idmaps as M
 from . import tagsystem, tagcombo, specialcancels, move_overrides, retarget
 
@@ -59,7 +60,13 @@ REQ_FALSE = {
            # (Tekken 7's 830: the player's byte +0xf64 > 0; Kugai Dachi / Demon Bolt -> their absorbing twins)
            1049: 'power crush absorption',
            # the opponent's throw-break state +0x1c08 set (461: clear; REQ_T8ONLY)
-           460: 'the opponent\'s throw-break state (set)'},
+           460: 'the opponent\'s throw-break state (set)',
+           # the player's byte +0x2618 set or int +0x2610 >= 0 (case 0x14187ce81): a Tekken 8 state its battle code
+           # starts (0x14190dafd: 0 and 1) and leaves (-1 and 0, also where a fighter is set up: 0x14190a83f), so
+           # false outside it. Only off-chain evidence (3 rows) paired it with TTT2's 0 (true), which put rows Tekken 8
+           # keeps for that state in front of their plain twins: Reina's hellsweep, 2 ~d and #1782 ~d, Azucena's
+           # f,f,F+3,2 ~f into Libertador took the 0x3fff (continue) twin, #1782's 10 frames late
+           798: 'a Tekken 8 state (+0x2610 / +0x2618)'},
 }
 # 806 must be false for a player: Tekken 7's generic moves gate a 120-frame lock on it at frame 2 of every side step
 # ([806][0x8077 120][352][0x80a6 1]: moveset variable 1 = 120, which TTT2's down-tap side step needs at 0, its
@@ -117,6 +124,9 @@ REQ_OVERRIDE = {'t7': {}, 't8': {}}                  # requirement ids mapped by
 # of Heihachi's (df+1,2 among them); the reaction map makes the slam the donor's bound reaction, which TTT2 plays only
 # under 467: a slam plays the donor's air hit after a bound (conv_hitconds), unless the definition makes it a bound
 T7_AIR = {'t7': 614, 't8': 723}
+# Keep the two-stage CH stomach crumple: alignment can confuse its grounded
+# hit slot with a normal stagger and lose both the collapse and its follow-up.
+PRESERVE_T7_REACTIONS = {'sDm_nkdoBxC', 'sDm_nkd2BxC'}
 # Direction tests: TTT2's requirement function (sub_0404FF30) has four sets of four, front first, back last, at 81..96
 # (*(r24), *(r24 + 4), the quadrant of an angle (sub_05C5D9B4), the hit's direction *(r20)) and 97 (TTT2 only);
 # Tekken 7 has the same four sets at 84..99 (100 = TTT2's 98), Tekken 8 too (its ids up to 131 are Tekken 7's). The
@@ -149,6 +159,22 @@ REQ_OVERRIDE['t8'].update(LATCH_PROPS['t8'])         # (properties inside requir
 # pair 44 with TTT2's 46 (1324 rows of the generic moves) but have no row for 43, which only her own moves test (on
 # contact: Inverse Deva Laser's second part #1621 -> #1622, Eisaimon's early 1RP2, the #775 chain): TTT2's 46 too
 REQ_OVERRIDE['t8'][43] = 46
+# Throw breaks: Tekken 8's 131..134 call one test (0x1418756a0) with break kinds 1..4 (135: the kind in `param`),
+# TTT2's 129..131 test kinds 1..3 (sub_0404FF30 stores 1 / 2 / 3 at +598): 1, 2 and 1+2 (Jun's Ju_Cnage01_y
+# `[(131)] win 1-15 -> nuke36_n`). The id maps pair 131 / 132 with 129 / 130 but have no row for 133, which Tekken 8
+# lists beside its throw-break state (`[(461), (133)]`: unequal lists give no evidence): 1+2 throws (Jun's Cnage,
+# Azucena's u/f+1+2) were unbreakable
+REQ_OVERRIDE['t8'][133] = 131
+# Distance tests: Tekken 8's and TTT2's 3..22 and 27..34 share one routine in each game (Tekken 8 0x141875b41, TTT2
+# 0x04050B28: the opponent in zone <id> within `param`), 23..26 have their own in both alike; Tekken 8's 491 / 493 are
+# zones 3 / 7 with the zone's angle in param2 (0x141875bde), which TTT2's 3 / 7 take from their own table. The low
+# throws test 493 (Azucena's Smell the Coffee ThrmvLOW_00 `[(493, 1600, 110)]`, TTT2's King `[(7, 1536)]`; 20 rows
+# of the saved fighters): no id map had them, so those throws never caught anyone
+REQ_OVERRIDE['t8'].update({491: 3, 493: 7})
+# ... and the parameter of a distance test is a distance in both games' units (the Ultimate Tackle tac02xk: Tekken 8
+# `(23, 1408)` and `(24 / 25 / 26, 1600)`, TTT2 `(23, 1408)` and `(24 / 25 / 26, 1536)`): FIT does not test it (TTT2
+# passes 1536 alone with 24..26, so the tackle's side and back catches were left out)
+DISTANCE_REQ = {'t7': set(), 't8': set(range(3, 35))}
 # The donor's cancels into TTT2-only generic moves (merge_donor_extras: a generic move name Tekken 7 has not; the tag
 # system's) go into the fighter's hub moves. Tekken 8 renamed or reworked many generic moves Tekken 7 and TTT2 share
 # (jump attacks Co_jplp00F -> its own Zbr_9LP, the crouching d/f+3 Co_syalkF, the throws ThrmvLB2_00, the Ki charge
@@ -175,7 +201,8 @@ MOVE_PARAM = {'t7': 0x81dc, 't8': 0x824c}
 # tested. Reina: 0x803d -> 0x8022 (1233 .. 3856 where TTT2 passes 0 .. 35), 0x8219 -> 0x8110 (1: TTT2 passes 0),
 # 0x8084 -> 0x8056 (TTT2's movesets never use it), her own 143 -> 139 (100: TTT2 tests 17 .. 46), ...
 PARRY = {'t7': {817, 823}, 't8': set()}            # parry lists: not converted
-# the meter (Tekken 7's EX moves and supers): its requirement and its cost; left out with free_meter_specials
+# the meter (Tekken 7's EX moves and supers): its requirement and its cost; left out with free_meter_specials, kept on
+# the runtime's gauge ids for a definition with GAUGE (convert/gauge.py)
 METER, METER_COST = {'t7': 629, 't8': 738}, {'t7': 0x81c2, 't8': 0x8232}
 EFFECT_PROP = 0x801f                 # spawn an effect: value = body part << 8 | effect id
 # Tekken 7 spawns effects with 0x8036 (the id maps find 0x801f) and, in a few moves, 0x8038 (the same value). Tekken 8
@@ -205,6 +232,27 @@ ELECTRIC_LEAD = 5
 # a hit point's limb (TTT2's skeleton records, as hit locations 0..21 and effect parts number them) -> the limb's root:
 # hand / forearm -> shoulder (KATA_R 7, KATA_L 11), foot / knee / toe -> thigh (MOMO_R 14, MOMO_L 17)
 ELECTRIC_ROOT = {8: 7, 9: 7, 12: 11, 13: 11, 15: 14, 16: 14, 20: 14, 18: 17, 19: 17, 21: 17}
+# Automatic evades (Tekken 8: Azucena's Libertador ducks a high attack, #1649, and hops a low one, #1637; dog's, okm's,
+# lon's and bbn's alike). Tekken 8 sets them with properties (its interpreter's cases 0x14189dfa2..0x14189e006):
+# 0x8606 = the evade's frames (player +0x19bc, counted down every frame, cleared as a move starts; 0x7fff: the rest of
+# the move) and per slot (value2: two of 32 bytes at +0x19d0) 0x8607 the evade move, 0x83ea the hit-level class it
+# takes (1 high, 2 mid, 3 low, any other value any attack), 0x83eb a direction test (her angle to the attacker below
+# 60 .. 180 degrees for 1..7) and 0x83ec (the evaded hit's effects left out). When an attack of the class connects
+# (the attacker's hit registration: 0x1418703b5, 0x141884ee0 ... -> 0x141904f70), the hit is voided and her move
+# becomes the slot's (0x14196aab0, extradata 0x80); a hit of another class ends the evade. TTT2 does that with
+# cancel rows, its parries: no input, requirement 678 / 679 / 680 (the opponent's high / mid / low attack by its hit
+# level, 0x512 0x806 / 0x217 0x31f 0x707 / 0x10f 0x41f: Tekken 8's classes, the two facing each other within 60
+# degrees) or 682 / 683 / 684 (the opponent's back turned), parameter the attacking limb (sub_0404D5C0: 0 any, but
+# an attack with hit location 64, a kiss, a laser or mist, which only 64 takes). Lei's Crane stance (5tsu_P) parries
+# lows so: such rows first in its list, 1-32767. So a converted move with an evade gets, first in its list, a row per
+# slot, test and limb over the evade's frames into the slot's move (evade_rows); TTT2 has no other direction tests.
+# In game (Azucena in Libertador, Jun attacking): jabs and low kicks turn into the duck / the hop on their active
+# frame and miss, the hop's kick hits back, a mid hits her, as in Tekken 8
+EVADE = {'t7': None, 't8': {'frames': 0x8606, 'move': 0x8607, 'class': 0x83ea, 'direction': 0x83eb, 'mark': 0x83ec}}
+EVADE_TESTS = {1: (678, 682), 2: (679, 683), 3: (680, 684)}      # Tekken 8 class -> TTT2's tests (faced, back turned)
+EVADE_LIMBS = (0, 64)
+EVADE_EXTRA = 0x80
+EVADE_FOREVER = 0x7FFF
 # properties left out (presentation or mechanics TTT2 has not, or values not converted yet)
 PROP_DROP = {
     't7': {0x828f: 'tiger animation', 0x828e: 'projectile index', 0x81bd: 'power crush',
@@ -268,7 +316,7 @@ WIN_QUOTE_PROP, WIN_QUOTE_VALUE = 0x82F9, 0x0E003000
 # tiger animation's index (opt_anims), else it is left out.
 TIGER_PROP = {'t7': 0x828f, 't8': None}
 OPT_ANIM_PROP, OPT_ANIM_BASE = 0x82de, 0x4000
-VALUE_KIND = {'t7': {0x8331: 'reaction', 0x8332: 'reaction', 0x843c: 'throwcam', 0x843d: 'throwcam',
+VALUE_KIND = {'t7': {0x81e8: 'pushback', 0x8331: 'reaction', 0x8332: 'reaction', 0x843c: 'throwcam', 0x843d: 'throwcam',
                      0x820b: 'projectile'},
               't8': {0x8478: 'reaction', 0x8479: 'reaction', 0x868f: 'throwcam', 0x8690: 'throwcam',
                      0x827b: 'projectile'}}
@@ -351,6 +399,15 @@ ANIM_COMMON, ANIM_PACK = 0x8000, 0x4000
 DROP_MOVES = r'RageArts|_EX\d?$|^b7_|^vra_|_7CS$|^Story|^FACE'
 # Tekken 7 generic moves (also Heihachi's, not in TTT2) converted when a reaction needs them, except these
 DROP_T_RE = re.compile(r'Balcony|_RA$|RAtk|RageArt|^vra_|_7CS$|^SE_|^FACE|Story|^b7_')
+# A reaction move the donor has no move of its own for takes the TTT2 move the evidence puts in its place
+# (idmaps.reaction_remap). For Tekken 8 that evidence can be one move whose effect changed between the games, counted
+# once per reaction slot (Azucena's Libertador 1 staggers in Tekken 8, sDm_KAOLee, 8 of the 28+ pairs said TTT2's
+# knock-down sDw_KAO00_; Libertador 2's stagger into a crouch, #405, became the launch sDw_UP_11_): a Tekken 8
+# reaction that keeps the opponent on its feet (REST: its transitions come to rest standing or crouching, none of them
+# airborne) does not take a TTT2 move that knocks down or launches; Tekken 8's own reaction is converted instead (its
+# class T or N move, its animation). Air, down and wall reactions keep TTT2's (its bounds and Tag Crash need them).
+REST = (('stand', re.compile(r'sKAM00_$')), ('crouch', re.compile(r'^cKAM')), ('down', re.compile(r'^d(w|Dw)')))
+REST_STEPS = 12                   # transitions followed at most
 ANIM_KEY_BYTES = 256                 # animations are matched by a hash of their first bytes
 
 
@@ -422,6 +479,9 @@ class Converter:
     # (a Tekken 7 source unless __init__ finds another game)
     game, end, prefix = 't7', T7_END, None
     linking = 0                         # > 0 while the links of the fighter's own (or converted) moves are made
+    gauge = None                        # the definition's GAUGE (convert/gauge.py), set by __init__
+    effects = None                      # its sound effects (convert/sounds.Effects; the importer's), or None
+    true_reqs = frozenset()             # (requirement, parameter) pairs true by the definition, set by __init__
     _fit = None                         # FIT's ranges: {'req' / 'prop': {TTT2 id: (lowest, highest)}}, when needed
 
     def __init__(self, k, h7, donor, donor_pack, h2, common_motions, maps, usage, newid, d):
@@ -531,7 +591,12 @@ class Converter:
         self.extra_index = {}
         for j, e in enumerate(T['cancel_extras']):
             self.extra_index.setdefault(e['value'], j)
-        dropped = DROP_MOVES.replace(r'|_EX\d?$', '') if d.MOVESET.get('free_meter_specials') else DROP_MOVES
+        self.gauge = G.of(d)            # Tekken 7's gauge kept (convert/gauge.py): its EX moves too
+        # (requirement, parameter) pairs the definition knows true for the fighter (Geese's MAX activation tests
+        # Tekken 7's variable 9, which nothing he does sets)
+        self.true_reqs = set(d.MOVESET.get('true_requirements', ()))
+        dropped = DROP_MOVES.replace(r'|_EX\d?$', '') if d.MOVESET.get('free_meter_specials') or self.gauge \
+            else DROP_MOVES
         self.drop_moves = re.compile('|'.join([dropped] + ([d.MOVESET['drop_moves']] if d.MOVESET.get('drop_moves')
                                                           else [])))
         self.ground_arcs = {}           # Tekken 7 move -> (frame, value) of its 0x8226 to bake (convert/arcs.py)
@@ -558,6 +623,10 @@ class Converter:
         g = self.game
         if c == self.end:
             return TT_END
+        if self.gauge and c in G.REQS[g]:
+            return G.REQS[g][c]
+        if self.gauge and c in G.PROPS[g]:         # (an action in a requirement list)
+            return G.PROPS[g][c]
         if c in REQ_OVERRIDE[g]:
             return REQ_OVERRIDE[g][c]
         if c in REQ_FALSE[g]:
@@ -577,12 +646,17 @@ class Converter:
         # must not remap it onto an unrelated native property.
         if p == METER_COST[g] and self.defn.MOVESET.get('free_meter_specials'):
             return None
+        if self.gauge and p in G.PROPS[g]:
+            return G.PROPS[g][p]
         if p == TIGER_PROP[g] and self.opt_anims:
             return OPT_ANIM_PROP
         if p in PROP_OVERRIDE[g]:
             return PROP_OVERRIDE[g][p]
         if p in PROJ_PROPS[g]:
             return PROJ_PROPS[g][p]
+        if EVADE[g] is not None and p in EVADE[g].values():        # (made into cancel rows: evade_rows)
+            self.stats['evade properties (cancel rows instead)'] += 1
+            return None
         if p in PROP_DROP[g]:
             self.stats['property dropped: ' + PROP_DROP[g][p]] += 1
             return None
@@ -597,7 +671,7 @@ class Converter:
         g = self.game
         return g == 't8' and not (c in VALUE_KIND[g] or c in SOUND_PROPS[g] or c in PROJ_PROPS[g] or
                                   c in PROP_OVERRIDE[g] or c in REQ_OVERRIDE[g] or c == MOVE_PARAM[g] or
-                                  c in CHAR_IS[g] or c in CHAR_IS_NOT[g])
+                                  c in CHAR_IS[g] or c in CHAR_IS_NOT[g] or c in DISTANCE_REQ[g])
 
     def fits(self, kind, b, v):
         """Value v fits TTT2 id b in a list of `kind` ('req' a requirement list, 'prop' a property list): TTT2's
@@ -653,8 +727,10 @@ class Converter:
         n = self.name(mid)
         if n in self.dn:
             return self.dn[n]
-        r = self.react_remap.get(n)
-        if r and r in self.dn:
+        r = self.react_remap.get(n) if n not in PRESERVE_T7_REACTIONS else None
+        if r and r in self.dn and self.game == 't8' and self.fells(mid, self.dn[r]):
+            self.stats['reaction remap refused (a Tekken 8 stagger, the TTT2 move fells)'] += 1
+        elif r and r in self.dn:
             self.stats['target remapped (Tekken 7-only move -> the TTT2 move in its place)'] += 1
             return self.dn[r]
         # Shared attacks (FC jabs/kicks, jump attacks, throw follow-ups) can be absent from the donor too.
@@ -706,6 +782,31 @@ class Converter:
             self._reachable = seen
         return self._reachable
 
+    @staticmethod
+    def rest(m, i, name):
+        """How move i of moveset m (name: its names) ends: (REST kind, whether a move on the way is airborne), or None
+        when its transitions reach none of REST's within REST_STEPS."""
+        air, seen = False, set()
+        for _ in range(REST_STEPS):
+            if i is None or i in seen or not 0 <= i < len(m.tables['moves']):
+                return None
+            seen.add(i)
+            for kind, pattern in REST:
+                if pattern.search(name(i)):
+                    return kind, air
+            mv = m.tables['moves'][i]
+            air = air or mv['airborne_start'] > 0
+            t = mv['transition']
+            i = m.resolve_alias(t) if t >= 0x8000 else t
+        return None
+
+    def fells(self, mid, j):
+        """Tekken 8 reaction mid keeps the opponent on its feet (rest(): standing or crouching, never airborne) where
+        the donor's move j knocks it down or launches it (unknown counts as not)."""
+        a, b = self.rest(self.k, mid, self.name), self.rest(self.d, j, self.d.move_name)
+        return (a is not None and b is not None and a[0] in ('stand', 'crouch') and not a[1]
+                and (b[0] == 'down' or b[1]))
+
     def is_state(self, i):
         """Tekken 7 move i is a movement state TTT2 lets a fighter tag out of (by TTT2's own movesets' move names,
         tagsystem.TagStates) that the fighter gets into without a button."""
@@ -745,16 +846,22 @@ class Converter:
             return {'condition': LATCH_PROP['ttt2'] + 3 * k + c - base, 'param': row['param2']}
         return None
 
-    def conv_reqs(self, i):
+    def conv_reqs(self, i, overrides=None):
         """A Tekken 7 requirement list -> (the new list's index, ok); ok False: the list can never be true."""
         if i is None:
             return None, True
-        key = ('req', i)
+        key = ('req', i, tuple(sorted(overrides.items()))) if overrides else ('req', i)
         if key in self.cache:
             return self.cache[key]
         g = self.game
         rows, res = [], None
         for c, p, row in self.req_rows(i):
+            if (c, p) in self.true_reqs:
+                self.stats['requirements true by the definition'] += 1
+                continue
+            if g == 't7' and c == 176 and p == 0 and self.defn.MOVESET.get('free_max_mode'):
+                self.stats['MAX mode requirements removed (opt-in)'] += 1
+                continue
             if c in (METER[g], METER_COST[g]) and self.defn.MOVESET.get('free_meter_specials'):
                 self.stats['meter requirements/costs removed (opt-in)'] += 1
                 continue
@@ -793,7 +900,7 @@ class Converter:
                 self.stats['Tekken 8-only requirements -> false: ' + what] += 1
                 res = (None, False)
                 break
-            c2 = self.map_req(c)
+            c2 = overrides[c] if overrides and c in overrides else self.map_req(c)
             if c >= 0x8000 and c not in (self.end, MOVE_PARAM[g]) and c not in REQ_PROP_KEEP[g]:
                 v = self.req_value(row)           # (a Tekken 8 sound: its split value, req_value)
                 p2 = self.conv_value(c, v) if c2 is not None and v is not None else None
@@ -910,6 +1017,8 @@ class Converter:
         if t7id == SCREW_COUNTER[g] and v == SCREW_SPEND:
             return None
         kind = VALUE_KIND[g].get(t7id)
+        if kind == 'pushback':
+            return self.conv_pushback(v)
         if kind == 'throwcam':
             return self.conv_throwcam(v)
         if kind == 'reaction':
@@ -920,6 +1029,9 @@ class Converter:
             if t7id == OPPONENT_VOICE8[0]:
                 return OPPONENT_VOICE8[1].get(v & 0xFFFFFF) if v >> 24 == VOICE8_BANKS[1] else None
             return self.voice8(v)
+        if t7id in SOUND_PROPS[g] and self.effects is not None and self.effects.move_value(v) is not None:
+            self.stats['sound effects (item sounds of its own)'] += 1
+            return self.effects.move_value(v)
         if t7id in SOUND_PROPS[g] and v not in self.donor_sound[self.prop_map.lookup(t7id)[0]] and \
                 not self.own_voice(v):
             return None
@@ -1066,6 +1178,11 @@ class Converter:
                     rows.append(dict(frame=f, id=DAMAGE_DEAL[g][idv], value=points))
                     self.stats['throw damage dealt'] += 1
                 continue
+            stop = G.stop_frames(t7, idv, v, g) if self.gauge else None
+            if stop:                                        # a super's time stop (convert/gauge.py)
+                rows.append(dict(frame=f, id=G.STOP, value=stop))
+                self.stats['time stops'] += 1
+                continue
             p = self.map_prop(idv) if idv >= 0x8000 else self.map_req(idv)
             if p is None:
                 continue
@@ -1149,6 +1266,78 @@ class Converter:
                 made[start] = self.with_props(start, [dict(frame=0x8001, id=WEAPON_HOLD_PROP, value=0)])
             row['extraprops'] = made[start]
             self.stats['weapon summons: thrown weapons held after a hit'] += 1
+
+    def evades(self, i):
+        """Move i's automatic evades (EVADE): [(first frame, last frame, [(Tekken 8 class, Tekken 8 evade move)] by
+        slot)]: each row setting its frames (always rows: TTT2's cannot have conditions) opens one, to its frames' end
+        or the next such row, with the slots as the move sets them up to its frame (a slot with move 0 is none, as in
+        Tekken 8; it keeps a slot's class from an earlier move: a slot the move gives no class takes any attack, as a
+        fresh player's)."""
+        ids = EVADE[self.game]
+        start = self.k.tables['moves'][i]['extraprops']
+        if ids is None or start is None:
+            return []
+        rows = []
+        for _, x in self.k.iter_list('extra_move_properties', start, lambda x: x['id'] == 0 and x['frame'] == 0):
+            if x['id'] == 0 and x['frame'] == 0:
+                break
+            if x['id'] in ids.values():
+                r, ok = self.conv_reqs(x['req'])
+                if ok and self.always(r):
+                    rows.append((1 if x['frame'] >= 0x8000 else max(1, x['frame']), x['id'], x['value'], x['value2']))
+        rows.sort(key=lambda x: x[0])
+        opens = [(f, v) for f, idv, v, _ in rows if idv == ids['frames']]
+        out = []
+        for n, (f, frames) in enumerate(opens):
+            last = f + frames - 1 if frames < EVADE_FOREVER else 32767
+            if n + 1 < len(opens):
+                last = min(last, opens[n + 1][0] - 1)
+            slots = {}
+            for g, idv, v, s in rows:
+                if g <= f and idv in (ids['move'], ids['class']):
+                    slots.setdefault(s, {})[idv] = v
+            got = [(slots[s].get(ids['class'], 0), slots[s][ids['move']]) for s in sorted(slots)
+                   if slots[s].get(ids['move'])]
+            if frames > 0 and last >= f and got:
+                out.append((f, min(last, 32767), got))
+        return out
+
+    def evade_rows(self):
+        """The converted moves with Tekken 8 evades get, first in a copy of their cancel list, TTT2's rows for them
+        (EVADE): per evade, slot, TTT2 test (EVADE_TESTS, all three for any class) and limb (EVADE_LIMBS), no input,
+        over the evade's frames into the slot's move."""
+        if EVADE[self.game] is None:
+            return
+        reqs, made = {}, {}
+        for t8, i in sorted(self.newidx.items()):
+            rows = []
+            for first, last, slots in self.evades(t8):
+                for cls, mid in slots:
+                    to = self.target(mid)
+                    if to is None:
+                        self.stats['evades left out: the evade move is not converted'] += 1
+                        continue
+                    for test in EVADE_TESTS.get(cls, sum(EVADE_TESTS.values(), ())):
+                        for limb in EVADE_LIMBS:
+                            if EVADE_EXTRA not in self.extra_index:
+                                self.extra_index[EVADE_EXTRA] = self.add('cancel_extras', {'value': EVADE_EXTRA})
+                            if (test, limb) not in reqs:
+                                reqs[test, limb] = len(self.T['requirements'])
+                                self.T['requirements'] += [{'condition': test, 'param': limb},
+                                                           {'condition': TT_END, 'param': 0}]
+                            rows.append(dict(direction=0, button=0, req=reqs[test, limb],
+                                             extradata=self.extra_index[EVADE_EXTRA], win_start=first, win_end=last,
+                                             start_frame=first, move_id=to, option=0))
+            move = self.T['moves'][i]
+            if not rows or move['cancel'] is None:
+                continue
+            key = (move['cancel'], tuple(tuple(sorted(r.items())) for r in rows))
+            if key not in made:
+                made[key] = tagsystem.write(self.T, 'cancels',
+                                            rows + [dict(c) for c in tagsystem.cancels(self.T, move['cancel'])])
+            move['cancel'] = made[key]
+            self.stats['moves given automatic evades (Tekken 8: cancel rows)'] += 1
+            self.stats['automatic evade rows'] += len(rows)
 
     def with_props(self, start, extra):
         """A new property list: the one at `start` (None: none) with rows `extra` after it -> its index."""
@@ -1366,10 +1555,15 @@ class Converter:
         out[0] = PROJ_EFFECT
         for to, fr, n in PROJ_FIELDS:
             out[to:to + n] = v[fr:fr + n]
+        if self.gauge and out[4]:                           # its hits on one fighter (convert/gauge.py)
+            out[4] = G.projectile_hits(self.k, pi, self.game, M.cancels, M.reqs)
         for f in PROJ_SOUNDS:
             if out[f] and out[f] not in self.known_sounds and not self.own_voice(out[f]):
                 out[f] = 0
                 self.stats['projectile sound dropped'] += 1
+        if self.effects is not None and self.effects.hit_value(v[2]) is not None:   # its missile's hit sound
+            out[16] = self.effects.hit_value(v[2])
+            self.stats['projectile hit sounds (item sounds of its own)'] += 1
         n0 = len(self.T['hit_conditions'])
         hc = self.conv_hitconds(p['hit_condition'])
         out[19] = hc if hc is not None and len(self.T['hit_conditions']) > n0 else 0
@@ -1618,6 +1812,10 @@ class Converter:
         self.own_transitions()
         self.link_queued(counterpart)          # Tekken 7 generic movement states the last two reached
         self.bake_arcs()
+        self.stats['grounded Screw launches preserve Bound'] += len(
+            tagsystem.preserve_grounded_screw_bound(self.T, self.move_name))
+        self.stats['native running collision exits restored'] += tagsystem.restore_running_contacts(
+            self.T, self.move_name, d.tables, d.move_name)
         move_overrides.apply(self)
         specialcancels.apply(self)
         self.dismiss_when_hit()
@@ -1627,7 +1825,10 @@ class Converter:
         self.stats['Tag Crash: moves given the landing tag rows'] += tagsystem.add_landing_rows(
             self.T, tagsystem.landing_template(d.tables, d.aliases), nd, self.aliases)
         made = tagsystem.add_tag_assault(self.T, tagsystem.assault_template(d.tables, d.aliases), nd, self.move_name,
-                                         self.string)
+                                         self.string, self.defn.MOVESET.get('tag_assault_finish_hit', ()))
+        routes = {self.newidx[self.kn[parent]]: {self.newidx[self.kn[target]] for target in targets}
+                  for parent, targets in self.defn.MOVESET.get('tag_assault_strings', {}).items()}
+        self.stats['Tag Assault: string tag inputs restored'] += tagsystem.add_tag_assault_strings(self.T, made, routes)
         self.stats['Tag Assault: bound moves given a tag twin and its exit'] += len(made)
         # ... its idle variants of the stance get the stance's list (tag out, ...), and its launchers tag combos
         # (convert/tagcombo.py)
@@ -1635,6 +1836,8 @@ class Converter:
         if idle:
             self.stats['idle variants given their stance\'s list (tag out, ...)'] += idle
         tagcombo.apply(self)
+        # Tekken 8's automatic evades: cancel rows first in their moves' lists (EVADE)
+        self.evade_rows()
         if self.game == 't8':
             self.handoffs8()
         # every move belongs to the new motion row

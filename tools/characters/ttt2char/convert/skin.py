@@ -97,6 +97,22 @@ def gain(source, archives, sex, materials, bake, own=None, log=None):
     return g, target
 
 
+def gained(rgb, g):
+    """A skin texture (linear rgb) times the gain. The gain turns Tekken 7's orange skin into TTT2's paler, pinker
+    skin, lifting blue most (Lidia 1.48, 2.00, 2.47): texels of other colours (the mauve painted on Lidia's lids,
+    shown when they close; grey stubble) turned blue with it. So a texel takes the gain as far as it is coloured like
+    skin (its red over blue against the texture's mean), the rest a grey gain lifting it as much as the skin's
+    brightness."""
+    g = np.asarray(g, np.float64)
+    mean = rgb.reshape(-1, 3).mean(0).astype(np.float64)
+    k = float((mean * g) @ LUMA / max(float(mean @ LUMA), 1e-6))
+
+    def warmth(c):
+        return (c[..., 0] - c[..., 2]) / np.maximum(c.sum(-1), 1e-6)
+    w = np.clip(warmth(rgb) / max(float(warmth(mean)), 1e-3), 0, 1)[..., None]
+    return np.clip(rgb * (k + w * (g - k)).astype(rgb.dtype), 0, 1)
+
+
 def hue(rgb, target):
     """A skin texture (linear rgb, after the gain) with its mean's green/red and blue/red within HUE_SPAN of the
     target's (TTT2's faces): per material, as a fighter's face and its generic body textures differ."""

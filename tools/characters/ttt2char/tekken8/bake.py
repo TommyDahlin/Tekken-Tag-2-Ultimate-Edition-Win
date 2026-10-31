@@ -12,8 +12,15 @@ colour output):
     per channel: C = prod_k lerp(1, ID colour, mask_k) (one level at most covers a texel: id_levels);
         layer = max(1, 1 + 20 (max(C) - 0.9)) L C
     X = the R layer, then lerp(X, layer, saturate(sum_k mask_k)) for G, B, A (a later channel lies on top);
-    IDnn_DontColorOP (layered the same way) lerps back to D; texels no ID covers stay D
-    (the pattern layer, Saturation and the costume darkening of another constant buffer are 0 in default costumes)
+    IDnn_DontColorOP (layered the same way) lerps back to D: the shader takes 0 for a value of 4 or more, else
+    saturate(value) (1, 2 and 3 keep the texture's own colours: Azucena's vines; 4 is what the costumes give an ID
+    with a pattern: her leggings, top and jacket);
+    the pattern layer: X = lerp(X, P, P.a), P the Pattern texture (T_Alpha0_Dummy, nothing, unless a costume gives
+    one), turned about the grey axis by its hue, lerped to its luma by -saturation and to white (black) by its
+    brightness (the costume's Assign_PatternHue / Saturation / Brightness: Azucena's leggings' -1 makes their light
+    blue side panels silver; the hue's unit, turns, is an estimate: 0 in the default costumes);
+    texels no ID covers stay D
+    (Saturation and the costume darkening of another constant buffer are 0 in default costumes)
   The colours per ID come from the costume (material.Materials.costume_colours), else from the material.
   Masked costume materials (a BlendMode override of Masked): alpha = OBD.R, cut at the opacity mask clip value.
   Sheer cloth (the subsurface stockings, MI_CH_ITM_SS_*: ShadingModel Subsurface): the game shows the leg through it
@@ -23,10 +30,13 @@ colour output):
   game's own 1P and 2P pictures of Reina: stockings 130-147, 107-115, 100-103 (sRGB, lit) on the thighs, 87 69 62 on
   the shin in shadow; without the pictures' lighting (~1.1 in linear, as the costume colours measure) about 136 106 96
   against 133 93 80 baked: as bright, a little warmer (the game's sheen greys it).
-Skin (M_CH_skin*): tx01_BaseColor (real colours; the body parts' generic T_CH_femalebody_* textures) x TintColor.
-    The scalp mask (tx11_ScalpMask, face UV layout) paints R with ScalpColor_Eyebrow (the brows' shadow) and A with
-    ScalpColor_Hair01; the hair's own mask (its BaseItem's HairScalpMask, from the costume) paints A with the hair's
-    root colour (it stops the skin showing between the hair cards).
+Skin (M_CH_skin*): tx01_BaseColor (real colours; the body parts' generic T_CH_femalebody_* textures) x TintColor
+    (the compiled base-pass shader's, checked 2026-10-26 with the shader map's parameter table: the suntan / devil /
+    custom tints, dirt, sweat and wrinkle colours are off in default costumes).
+    On IsFace materials only (the body permutation has no scalp painting) the scalp mask (tx11_ScalpMask, face UV
+    layout) paints R with ScalpColor_Eyebrow (the brows' shadow) and A with ScalpColor_Hair01; the hair's own mask
+    (its BaseItem's HairScalpMask, from the costume) paints A with the hair's root colour (it stops the skin showing
+    between the hair cards).
 Hair, eyebrows, lashes (M_Hair*): no colour texture. The base colour, from the compiled base-pass pixel shader of
     Reina's hair instance (M_Hair_Ver7; which constant is which parameter read from the code's structure):
     lerp(RootColor, TipColor, Root ** TipPower) (the Root map is 0 where a card meets the scalp, rising towards its
@@ -96,6 +106,10 @@ SATIN = 0.75
 SPECULAR_SIZE = 256
 ID_MAP_SIZE = 1 << 16               # an ID map is read at its top mip (Tekken 8 cooks one): a smaller mip's averaged
                                     # texels would mix IDs
+DONT_COLOUR_OFF = 4.0               # IDnn_DontColorOP at or above this colours the ID after all (the shader's test)
+# the costume's pattern adjustments (material.customize_colours puts them among the scalars)
+PATTERN_HUE, PATTERN_SATURATION, PATTERN_BRIGHTNESS = ('Assign_PatternHue', 'Assign_PatternSaturation',
+                                                       'Assign_PatternBrightness')
 
 
 def srgb_to_linear(x):
@@ -166,6 +180,22 @@ def _texture(textures, path, grey=False):
     return rgb, a
 
 
+def _pattern(X, eff, textures, shape):
+    """The costume shader's pattern layer over the coloured texels X (the module notes)."""
+    p, pa = textures.linear(eff['textures']['Pattern'])
+    if not pa.any():
+        return X
+    s = eff['scalars']
+    p, pa = _resize(p, shape), _resize(pa, shape)[..., None]
+    hue = s.get(PATTERN_HUE, 0.0)
+    if hue:
+        p = hue_turn(p, np.full(shape, 2 * np.pi * hue, np.float32))
+    p = p - s.get(PATTERN_SATURATION, 0.0) * (_luma(p) - p)
+    bright = s.get(PATTERN_BRIGHTNESS, 0.0)
+    p = p + abs(bright) * (float(bright > 0) - p)
+    return X + pa * (np.clip(p, 0, 1) - X)
+
+
 # ------------------------------------------------------------------------------------------------ families
 def bake_costume(eff, textures):
     """A costume material (M_CH_ITM_id_RGBA*) -> (linear rgb, alpha or None); the module notes give the formula."""
@@ -196,7 +226,8 @@ def bake_costume(eff, textures):
             for j in range(1, min(split[ch], IDS_PER_CHANNEL) + 1):
                 i = IDS_PER_CHANNEL * ch + j
                 palette[j] = _col(v.get('ID%02d_Color' % i, NO_ID_COLOUR))
-                dont[j] = np.clip(s.get('ID%02d_DontColorOP' % i, 0.0), 0, 1)
+                op = s.get('ID%02d_DontColorOP' % i, 0.0)
+                dont[j] = 0.0 if op >= DONT_COLOUR_OFF else np.clip(op, 0, 1)
             m = mask[..., None]
             C = 1.0 + m * (palette[k] - 1.0)
             layer, dn = _kgain(C) * L * C, m * dont[k][..., None]
@@ -206,6 +237,8 @@ def bake_costume(eff, textures):
                 X = X + m * (layer - X)
                 Dn = Dn + m * (dn - Dn)
         X = X + np.clip(Dn, 0, 1) * (D - X)
+        if textures.exists(t.get('Pattern')):
+            X = _pattern(X, eff, textures, shape)
         anyid = (idmap.astype(np.int32).sum(-1, keepdims=True) > 0).astype(np.float32)
         out = D + anyid * (X - D)
     out = np.clip(out, 0, 1)
@@ -227,6 +260,8 @@ def bake_skin(eff, textures, grey=False):
     if tint is not None:
         rgb = rgb * _col(tint)
     shape = rgb.shape[:2]
+    if not eff['switches'].get('IsFace'):         # (the body permutation of the shader paints no scalp: Reina's
+        return np.clip(rgb, 0, 1).astype(np.float32), None      # leg skin names her face's mask)
     for key, paints in (('tx11_ScalpMask', ((0, 'ScalpColor_Eyebrow'), (3, 'ScalpColor_Hair01'))),
                         ('HairScalpMask', ((3, 'ScalpColor_Hair01'),))):
         if not textures.exists(t.get(key)):

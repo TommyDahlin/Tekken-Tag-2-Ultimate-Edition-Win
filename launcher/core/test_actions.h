@@ -12,7 +12,8 @@
 // expand-dlc (opens the DLC list), expand-log (the last task's log),
 // show-uninstall (the uninstall dialog, closed again after its picture),
 // wait:<seconds>, focus:<id> (the keyboard focus on a button: "play",
-// "add:kazumi", ...), add-all:<game> and remove-all:<game> (a game's section's
+// "add:kazumi", ...), toggle:<id> (a check box clicked: "outfits:kazumi",
+// "outfits-all"), add-all:<game> and remove-all:<game> (a game's section's
 // Add All and Remove All: tekken7 or tekken8) and refresh (as the window's Check Again button; the
 // widget focused once it is done is logged). update-launcher is the header
 // bar's Update (the AppImage replaced by the newest release's and opened:
@@ -37,7 +38,7 @@ namespace launcher {
 struct TestAction {
     std::string name;              // "install", "add", ...
     std::vector<std::string> args; // install: GAME, FOLDER; add: names; remove: the name; uninstall: keep/all;
-                                   // wait: the seconds; focus: the widget's id; bind: the input, the keycode;
+                                   // wait: the seconds; focus, toggle: the widget's id; bind: the input, the keycode;
                                    // fullscreen, interpolation, input-delay: yes/no; resolution: as
                                    // display.ini names it
     std::string text;              // as given

@@ -210,6 +210,26 @@ class Convert(unittest.TestCase):
         setup, n, first = demos[throw['demo']]
         self.assertEqual(rows[first + n - 1], bytes([0, 0, movelist.LONG_TAIL, 0]))       # in the Throws section
 
+    def test_buffered_entry_bound_override_sets_its_icon(self):
+        # an entry the demo walk cannot follow (the definition's bound_entries): its icon is the named hit when that
+        # move is a bound, none when it is not; Tekken 8's tornado hit is never shown
+        source, _, _ = movelist.read(self.mvl)
+        marked = next(x for x in source if x['kind'] == 0 and (x['icons'] >> 8) & 255)
+        key = marked['keys'][0]
+        before, demos, inputs = read_ttt2(movelist.convert(self.mvl, None, texts_by_language=self.texts,
+                                                           bounds=lambda presses: {}))
+        self.assertTrue(all(x['icons'] == (0, 0) for x in before))
+        name = self.texts['en'][key]
+        for enabled, icons in ((True, (0, 2 << 8)), (False, (0, 0))):
+            after, new_demos, new_inputs = read_ttt2(movelist.convert(self.mvl, None, texts_by_language=self.texts,
+                bounds=lambda presses: {}, bound_entries={key: (2, enabled)}))
+            changed = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+            self.assertEqual(len(changed), int(enabled))
+            for i in changed:
+                self.assertEqual(after[i]['strings'][1], name)
+                self.assertEqual(after[i], dict(before[i], icons=icons))
+            self.assertEqual((new_demos, new_inputs), (demos, inputs))
+
     def test_unknown_action(self):
         m = bytearray(self.mvl)
         do = struct.unpack_from('<I', m, 0x18)[0]

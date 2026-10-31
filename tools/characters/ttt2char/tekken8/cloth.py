@@ -1,45 +1,57 @@
-"""Strands Tekken 8 simulates (cords, strap ends, ties) -> the cloth convert/cloth.py turns into swinging chains.
+"""Cloth Tekken 8 simulates (coats, fringes, cords, strap ends) -> the cloth convert/cloth.py turns into swinging chains.
 
 Tekken 8 moves a costume's cloth with Catwalk Cloth, its own solver. A skeletal mesh with cloth carries:
 * simulation meshes: sections of its own, skinned like the rest, in a material nobody sees (mesh.SIM_MATERIALS;
   Reina's body: MI_Cal_Mesh, 3123 vertices: her jacket, hood, sleeves, socks, boots' laces, the hood's strings,
-  the hem's three cords and the sleeve straps' loose ends);
+  the hem's three cords and the sleeve straps' loose ends; Azucena's: her jacket's hem, hood, sleeves with their
+  fringes, necklaces), or a drawn section simulated itself (Azucena's leggings: barely);
 * after its LODs, the Catwalk hook (`CatwalkClothHook` in the name map): a header naming the cloth's variations
-  (Reina's: v0, sta1, select, zbrvscbr_00_c1), then per variation its solver data, of which this module reads one
-  part, the first variation's (the others differ in how much of the jacket moves):
+  (Reina's: v0, sta1, select, zbrvscbr_00_c1; Azucena's: v0), then per variation its solver data; this module reads
+  the first variation's:
+      u32 1, u32 the number of simulation meshes, then per simulation mesh in its number's order, among more solver
+          data not read: the PARTICLES' block, five arrays of u32 n + n elements (PARTICLE_ARRAYS; n = the mesh's
+          vertices welded by position: Azucena's sleeves, 1485 vertices, are 1339 particles), the first the
+          particle's MAX DISTANCE (f32 cm: how far it may leave where its skin weights put it; 0 = pinned; painted
+          as smooth gradients: Azucena's sleeves 0 at the shoulder, 15 at the cuffs, 28 at the fringes' tips; Reina's
+          jacket 0 down to her waist, 35 at its hem, 60 at its back cord's end), ..., later the particles'
+          TRIANGLES (u32 t, t x (u16 a, b, c, u16 flags)) in the order of the simulation section's triangles: the
+          two lists aligned number the section's vertices' particles (a reordered copy of it comes first);
       u32 count, count x {u32 length, that many bytes (a NUL-terminated Maya path:
           '|zbr_bdu_1p_gp_msl|sim_mesh_group_bdu_msl|sim_mesh_zbr_1p_string_002|..Shape'), u32 the mesh's number}
       u32 count, count x {u32 N, N x u32 body, u32 m, u32 section, u32 simulation mesh's number, u32 kind}
   kind 0: the vertices of `section` (a simulation section) the solver moves for that simulation mesh: N = n (2 + m),
       n vertex numbers (in the section, ascending), n x u32 whose high 16 bits are how much the solver moves the
       vertex (0..65535: 0 = it follows its skin weights, 65535 = wholly simulated: a hood string's top 0, then 0.41,
-      0.74, 0.92, then 1; a vertex of the section in no list follows its skin), then n x m u32 (u16 a neighbour, u16
-      a value: the solver's constraints, not read);
-  kind 1: the vertices of a drawn section that follow that simulation mesh: n vertex numbers, then the rest (how
-      they follow it: not read).
-Read for Reina from her body (47 lists in each of 4 variations, every one parsing to the byte), her hair the same.
+      0.74, 0.92, then 1; every Azucena's 1; a vertex of the section in no list follows its skin), then m x n u32
+      (u16 a triangle of the simulation mesh, u16 a weight: each vertex on its triangles, the weights summing to
+      65535; not read);
+  kind 1: the vertices of a drawn section that follow that simulation mesh: n vertex numbers, n x u32 (high 16 bits:
+      how much the vertex follows the simulation, 0..1), then the same m x n triangles and weights (not read).
+Read for Reina from her body (47 lists in each of 4 variations, every one parsing to the byte), her hair the same;
+Azucena's body, hair and hair extras too (particles() aligns every simulation mesh but her leggings' and tank top's).
 
-TTT2 has no cloth solver. The big pieces (jacket, hood, sleeves, socks) hang as modelled and stay skinned, as
-convert/cloth.py leaves Tekken 7's barely moving cloth: how far Catwalk lets them move is in the parts not read.
-What sticks out is the strands Tekken 8 models straight out and lets fall: Reina's hem cords (out to the sides and
-back, 20 cm), her sleeve straps' loose ends (out from the upper arms; up after the re-pose to the donor's T-pose).
-A strand is an island of a simulation section (vertices joined by triangles) that
-* the solver moves wholly somewhere (FULL),
-* hangs from something: vertices it does not move (PINNED) or sewn onto another island (within WELD: a cord's top
-  is on the jacket's hem, a strap's on its sleeve); an island hanging from nothing is left (the hood),
-* is narrow (its vertices' second principal spread at most NARROW mm: a sleeve is a tube, a jacket a sheet), at
-  least STRAND_REACH long from where it hangs, has drawn vertices following it and does not lie on the body (LYING:
-  a boot's lace ends stay as they are).
-Each becomes one cloth for convert/cloth.add (the dict convert/cloth.find gives): its asset the strand's vertices
-posed as the model is (skinned through the model's re-pose: skeleton.repose), max distance 0 where it hangs from,
-its geodesic distance from there elsewhere; its drawn vertices those of the part the game moves with its
-simulation mesh (when the model says which they were: decimate's 'source') within DRAWN_REACH of the strand and
-nearer to it than to the rest of the simulation section; its chains have links STRAND_LINK long, are kept from
-STRAND_REACH, and hang (rig drapes them, _hanging): straight down when modelled tilted more than STRAND_FLOWING (the
-cords; the hood's strings lean on the chest as modelled and keep it), along the arm when hung from one (the straps:
-straight down in the T-pose would point into the body with the arms lowered). convert/cloth.py skins the drawn
-vertices to them and gives TTT2's spring file their entries and the legs' capsules. Its standing pose (settle) does
-nothing for them: it turns only chains closed round a leg (neighbours on both sides), and a strand is one chain.
+TTT2 has no cloth solver: what swings in it are chains of extra bones with spring entries (convert/cloth.py, after
+Lars's coat). pieces() makes Tekken 8's cloth into convert/cloth.add's cloths from the max distances, as
+convert/cloth.find does Tekken 7's APEX cloth: per island of a simulation mesh's particles, the particles moving at
+most the HOLD level stay on the body (skinned), the rest hang from them in pieces (connected particles):
+* a wide piece (a coat's tails) that may move at least cloth.FREE_MIN swings as Tekken 7's cloth does (Reina's
+  jacket below her chest), less stays (Azucena's cropped jacket's hem, 9.6 cm; the hoods, the necklaces, the hair);
+  the strands sewn onto it (strands(): Reina's hem cords, modelled sticking out) are taken out and hang on their own;
+* a narrow piece (a strand: a cord, a fringe strip, a strap end) swings when it may move at least SWING of its
+  length and does not lie on the body (LYING: a boot's lace ends);
+* on an arm the hold level rises (_hold) till all that swings off it is strands: a sleeve is a tube round the arm,
+  and chains hung from where it starts to move would pull the forearm's sleeve off the elbow; Azucena's sleeves stay
+  on the arms up to 13 cm and their 18 fringes swing, Reina's up to 2 cm and their strap ends swing.
+A strand's chains have links STRAND_LINK long and are kept from STRAND_REACH; it hangs (rig drapes it): straight down
+when modelled tilted more than STRAND_FLOWING (the cords; the hood's strings lean on the chest as modelled and keep
+it); from an arm as modelled if Tekken 8 models it hanging in its own pose (ARM_HANGING: the fringes), along the arm
+if not (the strap ends: straight down in the T-pose would point into the body with the arms lowered), with ARM_SPRING
+entries (Lars's coat's hardly let a chain move: the fringes stood out like spikes with her arms raised). Chains hang
+from body joints, not from the busts (rig 'body_parent'). The simulation meshes whose particles are not aligned keep
+the strands() rules of before: islands the solver moves wholly (FULL), hanging from vertices it does not move (PINNED)
+or sewn onto another island (WELD), narrow (NARROW), at least STRAND_REACH long, with drawn vertices within
+DRAWN_REACH, not lying on the body. convert/cloth.py skins the drawn vertices to the chains and gives TTT2's spring
+file their entries and the legs' capsules. Its standing pose (settle) is Tekken 7's only (from the .tkmvst).
 
 Written for this project from the files themselves (no third-party code).
 """
@@ -65,9 +77,27 @@ LYING = 20.0                    # mm: a strand whose vertices are this near the 
 STRAND_FLOWING = np.radians(50.0)   # a strand tilted more than this from straight down was modelled flowing: it
                                 # hangs (rig's FLOWING for Tekken 7's cloth: 30; a hood's strings lean 44 degrees on
                                 # the chest as modelled, the hem's cords stand out 58-60)
+HOLD_STEP = 0.5                 # cm: cloth on an arm is held on it up to a max distance raised by this till all that
+                                # swings off it is strands (Azucena's sleeves: 13 cm, the cuffs; their fringes swing)
+SWING = 0.5                     # a strand swings when it may move at least this share of its length (a boot's 6 cm
+                                # lace loops may move 6 cm, Reina's hood strings 9 of 15)
+ARM_HANGING = np.radians(70.0)  # a strand on an arm modelled at most this far from straight down in Tekken 8's own pose
+                                # (the arms 45 degrees down) hangs as modelled (Azucena's fringes: 24..58 degrees);
+                                # one sticking out further lies along the arm (Reina's strap ends: _hanging)
+ARM_SPRING = dict(flags=0x60, parameters=(20.0, 70.0, 20.0), limits=(1.57, -1.57, 1.57, -1.57), last=0.2)
+                                # the spring entry of a strand's chain hung from an arm, after TTT2's own sleeve
+                                # fringes' (common item wcm_etl_fringe: 20 70 10..40, limits 1.05 / 1.57 rad, 0.2), its
+                                # limits a quarter turn every way. In game (Azucena's fringes, the angle root to tip
+                                # from straight down, standing / walking / Libertador; held rigid 56 / 42 / 60): this
+                                # 23 / 15 / 15; with 20 70 40, Y 1.05: 37 / 23 / 30; Lars's coat's entry (30 10 70,
+                                # 0.05 / 0.2 rad) 47 / 34 / 57, the spikes the user saw; 10 50 100 rigid with any limits
 ARMS = (('L_Arm', 'L_ForeArm'), ('L_ForeArm', 'L_Hand'), ('R_Arm', 'R_ForeArm'), ('R_ForeArm', 'R_Hand'))
 KIND_SIMULATED, KIND_DRIVEN = 0, 1
 MAX_LISTS = 1 << 16
+PARTICLE_ARRAYS = (4, 4, 4, 8, 4)   # bytes an element of the per-particle arrays: max distance (f32 cm), a painted
+                                # map (u16 pair), a per-mesh log value (f32), 4 x u16 anchors (the particles it is
+                                # tied to, its own number for fewer), f32 (only the first is used)
+MAX_PARTICLES = 1 << 16         # (u16 particle numbers)
 NAME = re.compile(rb'[\x20-\x7e]{2,4095}\x00')
 
 
@@ -158,11 +188,14 @@ def _lists(b, p, end, sections):
 def catwalk(m):
     """Mesh m's Catwalk data this module reads: {'meshes': {number: name}, 'moved': {section: (n,) how much the
     solver moves each vertex, 0..1}, 'mesh_of': {section: (n,) the simulation mesh each vertex is in or -1},
-    'driven': {(drawn section, simulation mesh): its vertices}}; None for a mesh without (or an unknown layout)."""
+    'driven': {(drawn section, simulation mesh): its vertices}, 'solver': (offset, offset): where the first
+    variation's solver data lies in the package (before its name map: particles())}; None for a mesh without (or an
+    unknown layout)."""
     sections = m.lods[0].sections
     if not any(s.cloth_mapping for s in sections):
         return None
     start, end = hook_offset(m)
+    first = start
     b = m.package.data
     counts = [s.num_vertices for s in sections]
     while True:
@@ -173,6 +206,7 @@ def catwalk(m):
         if lists is not None:
             break
         start = p
+    at = p - 4 - sum(9 + len(name) for name in names.values())    # (where the name map starts)
     moved, mesh_of, driven = {}, {}, {}
     for section, sim, kind, vertices, words in lists:
         if kind == KIND_SIMULATED:
@@ -184,7 +218,95 @@ def catwalk(m):
         else:
             key = (section, sim)
             driven[key] = np.union1d(driven.get(key, np.zeros(0, np.int64)), vertices)
-    return {'meshes': names, 'moved': moved, 'mesh_of': mesh_of, 'driven': driven}
+    return {'meshes': names, 'moved': moved, 'mesh_of': mesh_of, 'driven': driven, 'solver': (first, at)}
+
+
+# ------------------------------------------------------------------------------------------------ particles
+def _weld(positions):
+    """Each vertex's particle (vertices at one place are one particle), numbered in order of first appearance."""
+    out, seen = np.empty(len(positions), np.int64), {}
+    for i, p in enumerate(np.ascontiguousarray(positions, np.float32)):
+        out[i] = seen.setdefault(p.tobytes(), len(seen))
+    return out, len(seen)
+
+
+def _block(b, p, end, n):
+    """Where the first per-particle block of n particles starts in b[p:end] (PARTICLE_ARRAYS, each u32 n first; the
+    max distances finite and >= 0, the anchors particles), or None."""
+    pattern = struct.pack('<I', n)
+    o = b.find(pattern, p, end)
+    while o >= 0:
+        q, at = o, []
+        for size in PARTICLE_ARRAYS:
+            if q + 4 + n * size > end or b[q:q + 4] != pattern:
+                break
+            at.append(q + 4)
+            q += 4 + n * size
+        else:
+            distance = np.frombuffer(b, '<f4', n, at[0])
+            anchors = np.frombuffer(b, '<u2', 4 * n, at[3])
+            if np.isfinite(distance).all() and (distance >= 0).all() and (anchors < n).all():
+                return o
+        o = b.find(pattern, o + 1, end)
+    return None
+
+
+def _triangles(b, p, end, welded, n):
+    """The particles' triangle list in b[p:end]: u32 t, then t x (u16 a, b, c, u16 flags) in the order of the
+    simulation section's triangles (welded: those (t, 3) in _weld's numbering) -> (each welded particle's number in
+    the solver's, the offset after the list), or (None, None) when no list there aligns with them."""
+    t = len(welded)
+    pattern = struct.pack('<I', t)
+    o = b.find(pattern, p, end)
+    while 0 <= o and o + 4 + 8 * t <= end:
+        q = np.frombuffer(b, '<u2', 4 * t, o + 4).reshape(t, 4)[:, :3].astype(np.int64)
+        if q.max(initial=0) < n:
+            number = np.full(n, -1, np.int64)
+            number[welded.reshape(-1)] = q.reshape(-1)
+            if (number >= 0).all() and (number[welded] == q).all() and len(np.unique(number)) == n:
+                return number, o + 4 + 8 * t
+        o = b.find(pattern, o + 1, end)
+    return None, None
+
+
+def particles(m, data, geo):
+    """The simulation meshes' particles as the solver keeps them, in its first variation (catwalk()'s 'solver'):
+    {simulation mesh: {'section', 'of' (the section's vertices' particle numbers, -1 off the mesh), 'vertex' (a
+    section vertex of each particle), 'triangles' (t, 3), 'max_distance' (n,) cm}}. geo: m.geometry(0). A mesh
+    whose block or triangles are not found (a simulation section that is also drawn: Azucena's leggings) is left
+    out."""
+    if not data.get('solver'):
+        return {}
+    b = m.package.data
+    p, end = data['solver']
+    sections = m.lods[0].sections
+    out = {}
+    for sim in sorted(set(int(x) for mesh_of in data['mesh_of'].values() for x in np.unique(mesh_of) if x >= 0)):
+        si = next(s for s, mesh_of in sorted(data['mesh_of'].items()) if (mesh_of == sim).any())
+        s = sections[si]
+        vertices = np.nonzero(data['mesh_of'][si] == sim)[0]
+        welded, n = _weld(geo['positions'][s.base_vertex + vertices])
+        if n >= MAX_PARTICLES:
+            continue
+        at = np.full(s.num_vertices, -1, np.int64)
+        at[vertices] = np.arange(len(vertices))
+        tris = geo['triangles'][si] - s.base_vertex
+        tris = at[tris[(at[tris] >= 0).all(1)]]
+        o = _block(b, p, end, n)
+        if o is None:
+            continue
+        number, after = _triangles(b, o, end, welded[tris], n) if len(tris) else (None, None)
+        if number is None:                                         # (the next mesh's block is after this one)
+            p = o + 4 * len(PARTICLE_ARRAYS) + n * sum(PARTICLE_ARRAYS)
+            continue
+        of = np.full(s.num_vertices, -1, np.int64)
+        of[vertices] = number[welded]
+        vertex = np.zeros(n, np.int64)
+        vertex[of[vertices][::-1]] = vertices[::-1]                # (the first vertex of each)
+        out[sim] = dict(section=si, of=of, vertex=vertex, triangles=number[welded[tris]],
+                        max_distance=np.frombuffer(b, '<f4', n, o + 4).astype(np.float64))
+        p = after
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ strands
@@ -283,17 +405,23 @@ def _driven(data, sections, sim, local):
     return out
 
 
+def _on_arm(k, info, geo, vertices):
+    """Whether the vertices' (a part's mesh numbering) skin weights mostly go to an arm bone (cloth.LIMBS)."""
+    names = k['bones']['names']
+    share = np.zeros(len(names))
+    np.add.at(share, info['remap'][geo['joints'][vertices]].reshape(-1), geo['weights'][vertices].reshape(-1))
+    target = skeleton.t7_weight_target(names[int(share.argmax())], None) or ''
+    return any(x in target for x in cloth_chains.LIMBS)
+
+
 def _hanging(k, info, geo, vertices, root):
     """How a strand hangs (rig's 'down' and 'flowing'): one hung from an arm (its top's skin weights mostly on an
     arm bone: cloth.LIMBS) lies along the arm's nearest segment, toward its end (it hangs when the arm does: straight
     down in the T-pose would point into the body with the arms lowered), however it was modelled; any other hangs
     straight down if modelled tilted more than STRAND_FLOWING."""
-    names = k['bones']['names']
-    share = np.zeros(len(names))
-    np.add.at(share, info['remap'][geo['joints'][vertices]].reshape(-1), geo['weights'][vertices].reshape(-1))
-    target = skeleton.t7_weight_target(names[int(share.argmax())], None) or ''
-    if not any(x in target for x in cloth_chains.LIMBS):
+    if not _on_arm(k, info, geo, vertices):
         return None, STRAND_FLOWING
+    names = k['bones']['names']
     at = {n: i for i, n in enumerate(names)}
     world = np.asarray(k['bones']['world'])[:, :3, 3]
     best = None
@@ -307,10 +435,215 @@ def _hanging(k, info, geo, vertices, root):
     return best[1] / np.linalg.norm(best[1]), 0.0
 
 
+def _components(free, adjacency):
+    """Each particle's connected part of the free particles (joined by edges through free particles), -1 for others."""
+    out = np.full(len(free), -1, np.int64)
+    number = 0
+    for start in np.nonzero(free)[0]:
+        if out[start] >= 0:
+            continue
+        out[start] = number
+        stack = [start]
+        while stack:
+            x = stack.pop()
+            for y in adjacency[x]:
+                if free[y] and out[y] < 0:
+                    out[y] = number
+                    stack.append(y)
+        number += 1
+    return out
+
+
+def _spread(points):
+    """The points' principal spreads (one sigma, largest first)."""
+    if len(points) < 2:
+        return np.zeros(3)
+    return np.sqrt(np.maximum(np.linalg.eigvalsh(np.cov((points - points.mean(0)).T)), 0.0))[::-1]
+
+
+def _hold(points, max_distance, members, adjacency, arm):
+    """The hold level (cm) of an island of particles (members), its free pieces' numbers (_components) and which
+    particles it holds: PINNED_CM; on an arm raised by HOLD_STEP till every free piece reaching STRAND_REACH is
+    narrow (a strand), then on while the strands split further (Azucena's sleeves: 12.5 cm leaves two fringes joined,
+    13 cm all nine of a sleeve apart)."""
+    def level(hold):
+        held = members & (max_distance <= hold)
+        piece = _components(members & ~held, adjacency)
+        g, _ = cloth_chains._hang(points, held, adjacency)
+        reaching, wide = 0, False
+        for i in range(piece.max() + 1):
+            on = piece == i
+            reach = g[on][np.isfinite(g[on])]
+            if len(reach) and reach.max() >= STRAND_REACH:
+                reaching += 1
+                wide |= _spread(points[on])[1] > NARROW
+        return (hold, piece, held), reaching, wide
+
+    top = max_distance[members].max()
+    now, count, wide = level(cloth_chains.PINNED)
+    if not arm:
+        return now
+    hold = cloth_chains.PINNED
+    while wide and hold < top:
+        hold += HOLD_STEP
+        now, count, wide = level(hold)
+    while hold < top:
+        after, more, wide = level(hold + HOLD_STEP)
+        if wide or more <= count:
+            break
+        hold += HOLD_STEP
+        now, count = after, more
+    return now
+
+
+def _sewn(geo, data, d, sim, base):
+    """The strands sewn onto simulation mesh `sim` (strands() of its section, base: the section's first vertex; Reina's
+    jacket's hem cords, modelled sticking out from it) in its particles' numbers (d: particles()'): [(the strand's
+    particles, those it hangs from)]."""
+    si = d['section']
+    moved = data['moved'].get(si)
+    if moved is None:
+        return []
+    out = []
+    for v, hangs, _ in strands(geo['positions'][base:base + len(moved)], geo['triangles'][si] - base, moved):
+        number = d['of'][v]
+        if (data['mesh_of'][si][v] != sim).any() or (number < 0).any():
+            continue
+        strand = np.zeros(len(d['max_distance']), bool)
+        strand[number] = True
+        hang = np.zeros_like(strand)
+        hang[number[hangs]] = True
+        out.append((strand, hang))
+    return out
+
+
+def pieces(k, tag, info, geo, data, solver, drawn, local, used, log=print):
+    """The pieces of a part's simulated cloth that swing (find() with particles()' solver data): per simulation
+    mesh, per island of its particles, the hold level (_hold), then each free piece (_components) that
+    * is narrow (_spread across it at most NARROW: a cord, a fringe strip, a strap end), reaches STRAND_REACH, may
+      move at least SWING of its own length (above the hold level) and does not lie on the body (LYING: a boot's
+      lace ends), or
+    * is wide (a coat's tails, a skirt) and may move at least cloth.FREE_MIN, as Tekken 7's cloth must; the strands
+      sewn onto it (_sewn) are pieces of their own, hanging from where they are sewn on, moving their max distance;
+    -> [cloth for convert/cloth.add]: its asset the piece and the held particles it hangs from (their max distance 0,
+    the piece's its max distance above the hold level), its drawn vertices those the game moves with this simulation
+    mesh whose nearest particle of the part's is one of these, 'body_parent'. A narrow piece has strand chains (link
+    STRAND_LINK, reach STRAND_REACH): on an arm with ARM_SPRING entries, its modelled shape kept if Tekken 8 models it
+    hanging (in its own pose: tilted at most ARM_HANGING from straight down: Azucena's fringes), laid along the arm if
+    not (_hanging: Reina's strap ends); elsewhere hung if modelled tilted more than STRAND_FLOWING. A wide one has
+    Tekken 7's."""
+    if not solver:
+        return []
+    pos = k['prims'][0]['pos']
+    sections = info['mesh'].lods[0].sections
+    sims = sorted(solver)
+    posed = {sim: _posed(k, info, geo, sections[solver[sim]['section']].base_vertex + solver[sim]['vertex'])
+             for sim in sims}
+    every = np.concatenate([posed[sim] for sim in sims])
+    owner_sim = np.concatenate([np.full(len(posed[sim]), sim) for sim in sims])
+    owner = np.concatenate([np.arange(len(posed[sim])) for sim in sims])
+    out, still = [], []
+    for sim in sims:
+        d = solver[sim]
+        points, distance = posed[sim], d['max_distance']
+        base = sections[d['section']].base_vertex
+        mesh = data['meshes'].get(sim, '?').rsplit('|', 1)[-1]
+        candidates = drawn[_driven(data, sections, sim, local)] if local is not None else drawn
+        nearest = cloth_chains._nearest(pos[candidates], every)[0] if len(candidates) else np.zeros(0, np.int64)
+        mine = owner_sim[nearest] == sim
+        candidates, nearest = candidates[mine], owner[nearest[mine]]
+        body = pos[np.setdiff1d(used, candidates)]
+        _, adjacency = cloth_chains._edges(d['triangles'], len(points))
+        island = _islands(d['triangles'], len(points))
+        swing, left, lines, holds = [], [], [], []
+        sewn = None
+        for i in np.unique(island[island >= 0]):
+            members = island == i
+            if distance[members].max() <= cloth_chains.PINNED:
+                continue
+            arm = _on_arm(k, info, geo, base + d['vertex'][members])
+            hold, piece, held = _hold(points, distance, members, adjacency, arm)
+            if hold > cloth_chains.PINNED:
+                holds.append(hold)
+            found = []                                               # [(piece, what it hangs from, hold level)]
+            for j in range(piece.max() + 1):
+                on = piece == j
+                if _spread(points[on])[1] > NARROW:                  # (the strands sewn on it hang on their own)
+                    sewn = _sewn(geo, data, d, sim, base) if sewn is None else sewn
+                    for strand, hang in sewn:
+                        if (strand & on).sum() * 2 > strand.sum():
+                            on = on & ~(strand & ~hang)
+                            found.append((strand & ~hang, hang, 0.0))   # (it swings as far as it may move)
+                found.append((on, held, hold))
+            for on, hangs, level in found:
+                g, _ = cloth_chains._hang(points, hangs, adjacency)
+                reach = g[on][np.isfinite(g[on])]
+                if not len(reach) or reach.max() < STRAND_REACH:
+                    continue
+                reach = float(reach.max())
+                moves = float(distance[on].max()) - level
+                narrow = _spread(points[on])[1] <= NARROW
+                what = '%s %.0f mm long' % ('a strand' if narrow else 'cloth', reach)
+                if narrow and moves * 10.0 < SWING * reach or not narrow and moves < cloth_chains.FREE_MIN:
+                    left.append('%s moving %.0f cm' % (what, moves))
+                    continue
+                if narrow:
+                    lying = float(np.median(cloth_chains._nearest(points[on], body)[1])) if len(body) else np.inf
+                    if lying < LYING:
+                        left.append('%s lying on the body (%.0f mm)' % (what, lying))
+                        continue
+                ring = np.zeros(len(points), bool)                   # (and the held particles it hangs from)
+                for x in np.nonzero(on)[0]:
+                    ring[[y for y in adjacency[x] if hangs[y]]] = True
+                keep = on | ring
+                number = np.full(len(points), -1, np.int64)
+                number[keep] = np.arange(keep.sum())
+                tris = number[d['triangles'][keep[d['triangles']].all(1)]]
+                follow = candidates[keep[nearest]]
+                if not len(follow):
+                    left.append('%s: no drawn vertices follow it' % what)
+                    continue
+                p = points[keep]
+                vertices = np.stack([p[:, 0], p[:, 2], p[:, 1]], 1) / 10.0
+                free = np.maximum(distance[keep] - level, 2 * cloth_chains.PINNED)
+                c = dict(part=tag, asset=Strand(vertices, np.where(on[keep], free, 0.0), tris), vertices=follow,
+                         name='%s %s piece %d' % (tag, mesh, len(swing)), body_parent=True)
+                how = ''
+                if narrow:
+                    c.update(link=STRAND_LINK, reach=STRAND_REACH, down=None, flowing=STRAND_FLOWING)
+                    if arm:                                          # (modelled hanging in Tekken 8's own pose?)
+                        c['spring'] = ARM_SPRING
+                        raw = geo['positions'][base + d['vertex']].astype(np.float64)
+                        tip = raw[np.nonzero(on)[0][np.argmax(g[on])]] - raw[ring].mean(0)
+                        if tip[2] < -np.cos(ARM_HANGING) * np.linalg.norm(tip):
+                            c['flowing'], how = np.pi, ' (from an arm: as modelled)'
+                        else:
+                            c['down'], c['flowing'] = _hanging(k, info, geo, base + d['vertex'][ring],
+                                                               points[ring].mean(0))
+                            how = ' (from an arm: laid along it)'
+                swing.append(c)
+                lines.append('    %s: %s, moving %.0f cm, %d drawn vertices%s' % (c['name'], what, moves,
+                                                                                 len(follow), how))
+        if swing:
+            log('  %s %s: %d piece%s swing%s%s' % (
+                tag, mesh, len(swing), '' if len(swing) == 1 else 's', ' (held up to %s cm on the arm)' % '/'.join(
+                    '%.1f' % h for h in holds) if holds else '', '; left skinned: %s' % '; '.join(left) if left else ''))
+            for line in lines:
+                log(line)
+        else:
+            still.append('%s (%.0f cm)' % (mesh, distance.max()))
+        out += swing
+    if still:
+        log('  %s: simulated, moving too little to swing, skinned: %s' % (tag, ', '.join(still)))
+    return out
+
+
 def find(k, parts, log=print):
-    """The strands of the costume's parts Tekken 8 simulates, as convert/cloth.find gives Tekken 7's cloth: [{'part',
-    'asset' (Strand), 'vertices' (the drawn vertices in k's streams), 'name', and for rig 'link', 'reach', 'down',
-    'flowing'}]. k: the model as model.tekken8_model makes it (decimated, re-posed); parts: [(tag, path)]."""
+    """The cloth of the costume's parts Tekken 8 simulates and that swings, as convert/cloth.find gives Tekken 7's:
+    [{'part', 'asset' (Strand), 'vertices' (the drawn vertices in k's streams), 'name', and for rig 'link', 'reach',
+    'down', 'flowing' (strands)}]: pieces() of the simulation meshes whose particles the solver data gives
+    (particles()), strands() of the others. k: the model as model.tekken8_model makes it (decimated, re-posed);
+    parts: [(tag, path)]."""
     out = []
     pos = k['prims'][0]['pos']
     used = np.unique(np.concatenate([p['tris'].reshape(-1) for p in k['prims']]))
@@ -329,6 +662,8 @@ def find(k, parts, log=print):
         sections = m.lods[0].sections
         drawn = np.unique(np.concatenate([p['tris'].reshape(-1) for p in k['prims'] if p['part'] == tag]))
         local = original[drawn] - first[tag] if original is not None else None
+        solver = particles(m, data, geo)
+        out += pieces(k, tag, info, geo, data, solver, drawn, local, used, log)
         left, number = [], 0
         for si, moved in sorted(data['moved'].items()):
             s = sections[si]
@@ -344,6 +679,8 @@ def find(k, parts, log=print):
                 reach = float(g[np.isfinite(g)].max())
                 sims = data['mesh_of'][si][v]
                 sim = int(np.bincount(sims[sims >= 0]).argmax()) if (sims >= 0).any() else -1
+                if sim in solver:                                    # (its particles are read: pieces())
+                    continue
                 name = '%s strand %d (%s)' % (tag, number, data['meshes'].get(sim, '?').rsplit('|', 1)[-1])
                 number += 1
                 if reach < STRAND_REACH:

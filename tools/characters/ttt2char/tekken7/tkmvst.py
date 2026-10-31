@@ -11,6 +11,8 @@
     back to back), animations, MOTAs, movelist.
     Moveset info: ..., u16 aliases[56] @0x28, u16 current aliases[56] @0x98, u16 unknown[36] @0x108.
     Table: 19 x {u64 offset into the moveset block, u64 count}. A move's anim is an offset into the animation block.
+    MOTA list: 13 x u64 offsets into the MOTA block (all ones: none), as TTT2's motbin MOTA slots; entry 4 = the face
+    animations (90 channels: 43 face joints' (translation, rotation) pairs, then 4 x descriptor 3).
 """
 import lzma
 import os
@@ -21,6 +23,7 @@ from ..lz4 import decompress_block
 from ..movesets import T7, TABLE_ORDER, Moveset, read_table
 
 BLOCKS = ['info', 'table', 'motalists', 'name', 'moveset', 'animation', 'mota', 'movelist']
+FACE_MOTA = 4                   # the MOTA list's face animations
 
 
 def decompress(d):
@@ -68,7 +71,19 @@ def read(path):
     m.anim_offsets = offs
     m.anim_size = dict(zip(offs, [b - a for a, b in zip(offs, offs[1:] + [len(m.animbuf)])]))
     m.movelist = d[ab[7]:ab[8]]           # the displayable command list (MVLT), if TKMovesets2 saved it
+    m.motabuf = d[ab[6]:ab[7]]
+    m.motalist = list(struct.unpack_from('<13Q', d, ab[2])) if ab[3] - ab[2] >= 104 else []
     return m
+
+
+def face_animations(m):
+    """The face animations of a read moveset: [values (frames, 90, 3)] (animation.decode's), [] if it has none."""
+    from ..ttt2 import animation, motion          # (numpy: the launcher reads movesets without it)
+    if len(m.motalist) <= FACE_MOTA or m.motalist[FACE_MOTA] >= len(m.motabuf):
+        return []
+    at = m.motalist[FACE_MOTA]
+    endian, offs = motion.mota_offsets(m.motabuf, at)
+    return [animation.decode(m.motabuf, endian, at + o)['values'] for o in offs]
 
 
 def saved_movesets(folder):

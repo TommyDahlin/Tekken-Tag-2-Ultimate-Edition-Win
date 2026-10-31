@@ -76,6 +76,8 @@ VOICE_PREFIX = 'it'
 # the id maps: Heihachi in both games, and his generic moves against TTT2's (Heihachi, the donor, Asuka)
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
+    # Match Noctis d/b+2 on counter hit only; retain normal-hit behavior.
+    'counterhit_reactions': {'It_siderk00': 'sDw_utuharai_r'},
     'name': '[CLAUDIO]',
     # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
     'bounds': dict.fromkeys(('It_4lklk', 'It_4rklkrp', 'It_4rklkrpn', 'It_66rprp', 'It_chest', 'It_lrp2', 'It_lrp2n',

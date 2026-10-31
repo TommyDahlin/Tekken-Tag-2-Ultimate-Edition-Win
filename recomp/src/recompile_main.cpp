@@ -7,7 +7,18 @@
 #include "rpx.h"
 #include "text.h"
 
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <bcrypt.h>
+#include <limits>
+#else
 #include <openssl/evp.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -26,10 +37,31 @@ namespace {
 
 std::string sha256_file(const fs::path& path) {
     std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot read " + path.string());
     const std::vector<char> data{std::istreambuf_iterator<char>(input), {}};
     unsigned char digest[32];
     unsigned int length = 0;
-    EVP_Digest(data.data(), data.size(), digest, &length, EVP_sha256(), nullptr);
+#ifdef _WIN32
+    if (data.size() > std::numeric_limits<ULONG>::max())
+        throw std::runtime_error("RPX is too large to hash");
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+        throw std::runtime_error("cannot open Windows SHA-256 provider");
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    auto status = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0);
+    if (status >= 0)
+        status = BCryptHashData(hash,
+            reinterpret_cast<PUCHAR>(const_cast<char*>(data.data())),
+            static_cast<ULONG>(data.size()), 0);
+    if (status >= 0) status = BCryptFinishHash(hash, digest, sizeof(digest), 0);
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (status < 0) throw std::runtime_error("Windows SHA-256 failed");
+    length = sizeof(digest);
+#else
+    if (EVP_Digest(data.data(), data.size(), digest, &length, EVP_sha256(), nullptr) != 1)
+        throw std::runtime_error("SHA-256 failed");
+#endif
     std::string hex;
     for (unsigned int i = 0; i < length; ++i) {
         hex += text::format("{:02x}", digest[i]);

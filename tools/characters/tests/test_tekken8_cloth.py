@@ -124,10 +124,35 @@ class Strands(unittest.TestCase):
         self.assertEqual(len(t), len(ct))
 
 
-def costume():
+def solver(positions, triangles, distance, order, junk=b'\x07' * 37):
+    """The solver data of one simulation mesh as the hook keeps it (particles(): its per-particle block, a reordered
+    triangle list of the same length, then the triangle list in the section's order) for a simulation section's
+    positions (n, 3) cm and triangles (t, 3): its particles are the welded vertices numbered in `order` (the solver's
+    numbers of the particles in order of first appearance), distance(position) their max distances."""
+    first, n = cloth8._weld(positions)
+    at = np.zeros(n, np.int64)
+    at[first[::-1]] = np.arange(len(first))[::-1]
+    number = np.asarray(order)
+    md = np.zeros(n, np.float32)
+    md[number] = [distance(positions[i]) for i in at]
+    b = bytearray(junk) + struct.pack('<I', n) + md.tobytes()
+    b += struct.pack('<I', n) + struct.pack('<%dI' % n, *([0xFFFF] * n))
+    b += struct.pack('<I', n) + struct.pack('<%df' % n, *([-0.5] * n))
+    b += struct.pack('<I', n) + np.repeat(np.arange(n, dtype='<u2'), 4).tobytes()
+    b += struct.pack('<I', n) + bytes(4 * n) + junk
+    tris = number[first[triangles]]
+    quads = np.concatenate([tris, np.zeros((len(tris), 1), np.int64)], 1).astype('<u2')
+    b += struct.pack('<I', len(tris)) + quads[::-1].tobytes() + junk          # (the reordered list first)
+    b += struct.pack('<I', len(tris)) + quads.tobytes() + junk
+    return bytes(b), number[first]
+
+
+def costume(particles=False):
     """A made-up Tekken 8 body mesh: a drawn section (a jacket front with a cord sticking out from its corner, as
     drawn) and a simulation section (the same shapes), as tekken8.mesh reads one, and the model tekken8.model makes
-    of it (one joint, Hip, at the origin: the re-pose changes nothing)."""
+    of it (one joint, Hip, at the origin: the re-pose changes nothing). particles: with the solver's data (solver():
+    the jacket's max distance 0 at its top, 40 cm at its bottom, the cord's 40 cm), the particles of the simulation
+    section numbered backward."""
     jacket, jt = sheet(-20, 20, 90, 140)
     cord, ct = ladder((20, 0, 90), (3.0, 0, -1.5), 9)                      # 27 cm out and down, 63 degrees
     sim = np.concatenate([jacket, cord])
@@ -149,6 +174,11 @@ def costume():
     moved[:5] = 0.0
     data = {'meshes': {0: '|g|sim_mesh_jacket|sim_mesh_jacketShape'}, 'moved': {1: moved},
             'mesh_of': {1: np.zeros(n, np.int64)}, 'driven': {(0, 0): np.arange(n)}}
+    if particles:
+        hook, _ = solver(sim.astype(np.float32), simt, lambda p: 0.8 * (140.0 - p[2]) if p[0] < 20.01 else 40.0,
+                         np.arange(cloth8._weld(sim.astype(np.float32))[1])[::-1])
+        mesh.package = types.SimpleNamespace(data=hook)
+        data['solver'] = (0, len(hook))
     cm = convert_model
     pos = cm._ue_to_ttt2_points(positions).astype(np.float64) * cm.M_TO_MM
     nrm = np.tile([0.0, 0.0, 1.0], (2 * n, 1))
@@ -231,6 +261,112 @@ class Find(unittest.TestCase):
     def test_the_source_finds_them(self):
         got = sources.Tekken8Source(None).cloth(self.k, [('bdf', '/Game/x')], log=lambda s: None)
         self.assertEqual(len(got), 1)
+
+
+class Particles(unittest.TestCase):
+    def test_welded_numbered_as_the_solver_numbers_them(self):
+        sheet_v, sheet_t = sheet(0, 4, 0, 4, n=3)
+        positions = np.concatenate([sheet_v, sheet_v[[4]]]).astype(np.float32)   # (a seam: vertex 9 is vertex 4's twin)
+        tris = sheet_t.copy()
+        tris[tris == 4] = np.where(np.arange(tris.size).reshape(tris.shape)[tris == 4] % 2, 4, 9)
+        order = [3, 7, 0, 5, 1, 8, 2, 6, 4]
+        hook, expected = solver(positions, tris, lambda p: float(p[0] + 10 * p[2]), order)
+        sections = [types.SimpleNamespace(num_vertices=len(positions), base_vertex=0, cloth_mapping=1)]
+        m = types.SimpleNamespace(lods=[types.SimpleNamespace(sections=sections)],
+                                  package=types.SimpleNamespace(data=hook))
+        data = {'mesh_of': {0: np.zeros(len(positions), np.int64)}, 'solver': (0, len(hook))}
+        got = cloth8.particles(m, data, {'positions': positions, 'triangles': [tris]})[0]
+        self.assertEqual(got['of'].tolist(), expected.tolist())
+        self.assertEqual(got['of'][4], got['of'][9])                       # (one particle)
+        np.testing.assert_allclose(got['max_distance'][got['of']], positions[:, 0] + 10 * positions[:, 2])
+        self.assertEqual(got['triangles'].tolist(), got['of'][tris].tolist())
+        self.assertEqual(got['of'][got['vertex']].tolist(), list(range(9)))
+        data['solver'] = (0, len(hook) - 8 * len(tris) - 41)              # (the aligned list cut off: left out)
+        self.assertEqual(cloth8.particles(m, data, {'positions': positions, 'triangles': [tris]}), {})
+
+
+def comb(teeth=4, tooth=12.0, gap=4.0, width=3.0, rows=5):
+    """A sleeve's cuff with fringes (cm, the arm along x at z 100): a band 6 cm tall along the arm and `teeth`
+    strips hanging from it, max distance 0 at the band's top, 10 at its bottom, then growing 1 cm a cm."""
+    v, t, md = [], [], []
+
+    def grid(x0, x1, z0, z1, nx, nz, f):
+        base = len(v)
+        for r in range(nz):
+            for c in range(nx):
+                x, z = x0 + (x1 - x0) * c / (nx - 1), z0 + (z1 - z0) * r / (nz - 1)
+                v.append((x, 0.0, z))
+                md.append(f(z))
+        for r in range(nz - 1):
+            for c in range(nx - 1):
+                a = base + r * nx + c
+                t.extend([(a, a + 1, a + nx), (a + 1, a + nx + 1, a + nx)])
+    span = teeth * (width + gap)
+    grid(0, span, 100, 94, 2 * teeth * 2 + 1, 3, lambda z: (100 - z) / 6 * 10)
+    for i in range(teeth):
+        x0 = i * (width + gap)
+        grid(x0, x0 + width, 94, 94 - tooth, 2, rows, lambda z: 10 + (94 - z))
+    v = np.array(v)
+    w, n = cloth8._weld(v.astype(np.float32))
+    pos = np.zeros((n, 3))
+    pos[w] = v
+    dist = np.zeros(n)
+    dist[w] = md
+    return pos * 10.0, np.unique(w[np.array(t)], axis=0), dist
+
+
+class Hold(unittest.TestCase):
+    def test_on_an_arm_the_fringes_swing_alone(self):
+        points, tris, distance = comb()
+        _, adjacency = cloth._edges(tris, len(points))
+        members = np.ones(len(points), bool)
+        hold, piece, held = cloth8._hold(points, distance, members, adjacency, True)
+        self.assertEqual(piece.max() + 1, 4)                               # the four fringes, apart
+        self.assertTrue(10.0 <= hold < 11.0)
+        self.assertTrue(held[points[:, 2] >= 940].all())                   # (the band stays on the arm)
+        hold, piece, _ = cloth8._hold(points, distance, members, adjacency, False)
+        self.assertEqual((hold, piece.max() + 1), (cloth.PINNED, 1))        # elsewhere: Tekken 7's pinning
+
+
+class Pieces(unittest.TestCase):
+    def setUp(self):
+        self.k, data, self.jacket, self.cord = costume(particles=True)
+        self.saved = cloth8.catwalk
+        cloth8.catwalk = lambda mesh: data
+
+    def tearDown(self):
+        cloth8.catwalk = self.saved
+
+    def test_a_coat_swings_and_its_cord_hangs_on_its_own(self):
+        k, jacket, cord = self.k, self.jacket, self.cord
+        found = cloth8.find(k, [('bdf', '/Game/x')], log=lambda s: None)
+        self.assertEqual(len(found), 2)
+        strand, coat = sorted(found, key=lambda c: len(c['vertices']))
+        self.assertEqual((strand['link'], strand['reach'], strand['flowing']), (cloth8.STRAND_LINK,
+                                                                               cloth8.STRAND_REACH,
+                                                                               cloth8.STRAND_FLOWING))
+        self.assertNotIn('link', coat)                                     # (Tekken 7's chains)
+        self.assertTrue(coat['body_parent'] and strand['body_parent'])
+        cords = set(range(jacket, jacket + cord))
+        self.assertLessEqual(len(set(strand['vertices'].tolist()) - cords), 1)      # (and the corner it hangs from)
+        self.assertGreater(len(set(strand['vertices'].tolist()) & cords), cord - 3)
+        self.assertLessEqual(len(set(coat['vertices'].tolist()) - set(range(jacket))), 1)    # (the cord's top)
+        self.assertEqual(float(coat['asset'].max_distance.min()), 0.0)    # (hung from the top row)
+        prim = k['prims'][0]
+        n = len(prim['pos']) // 2                                          # (a body: three of the copy's vertices)
+        prim['tris'] = np.concatenate([prim['tris'], [[n, n + 1, n + 5]]])
+        made = cloth.add(k, found, 100, log=lambda s: None)
+        self.assertGreaterEqual(len(made), 3)                              # (the coat's chains and the cord's)
+        self.assertEqual(sum(1 for c in made if len(c['neighbours']) == 0 and c['part'] == 'bdf'), 1)
+
+    def test_cloth_moving_little_stays(self):
+        k = self.k
+        saved = cloth.FREE_MIN, cloth8.SWING
+        try:
+            cloth.FREE_MIN, cloth8.SWING = 100.0, 10.0
+            self.assertEqual(cloth8.find(k, [('bdf', '/Game/x')], log=lambda s: None), [])
+        finally:
+            cloth.FREE_MIN, cloth8.SWING = saved
 
 
 class Rig(unittest.TestCase):

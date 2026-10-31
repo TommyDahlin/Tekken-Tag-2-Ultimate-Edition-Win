@@ -24,6 +24,7 @@ SET = '/Game/Character/Item/Customize_Set/%s/CS_%s_%s'
 PART_ORDER = ('fac', 'har', 'hed', 'ex0', 'bdu', 'bdl', 'bdf', 'btm', 'fah', 'gla', 'acc')
 MERGE_ORDER = ('fac', 'bdf', 'bdu', 'bdl', 'btm', 'har', 'hed', 'ex0', 'fah', 'gla', 'acc')
 STATIC_MESH = 2                     # EBaseItemMeshType E_StaticMesh
+FACE_POSITION = 2                   # SetItemPositionId of the face (its materials alone take the hair's scalp mask)
 SKIN_PROBE = 64                     # mip of a skin texture its mean colour is taken from (sheer cloth's skin colour)
 
 
@@ -72,13 +73,15 @@ def costume(store, code, which='1p', materials=None):
             continue
         if mesh:
             items.append((slot, base.get('SetItemPositionId'), mesh))
-    parts, seen = [], {}
+    parts, seen, faces = [], {}, []
     for slot, pos, mesh in items:
         if pos in forced:                         # (worn under another item: its variant)
             mesh = forced[pos][1]
         seen[slot] = seen.get(slot, 0) + 1
         tag = slot if seen[slot] == 1 else '%s%d' % (slot, seen[slot])
         parts.append((tag, material.package_of(mesh)))
+        if pos == FACE_POSITION:
+            faces.append(material.package_of(mesh))
 
     def rank(order):
         return lambda tag: (order.index(tag.rstrip('0123456789')) if tag.rstrip('0123456789') in order
@@ -88,6 +91,8 @@ def costume(store, code, which='1p', materials=None):
         raise InputError('Tekken 8\'s costume %s has no skeletal meshes' % cs)
     materials = materials or material.Materials(store)
     colours = materials.costume_colours(prefabs)
+    if faces:
+        colours[material.FACE] = {material.short(m) for face in faces for m in mesh_materials(store, face)}
     skin = skin_colour(store, materials, [path for _, path in parts])
     if skin is not None:
         colours[material.SHEER] = {bake.SHEER_COLOUR: skin}

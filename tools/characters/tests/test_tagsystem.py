@@ -185,6 +185,54 @@ class Assault(unittest.TestCase):
         # a move that has its twin already is left alone
         self.assertEqual(TS.add_tag_assault(T, tpl, first, lambda i: names[T['moves'][i]['name']], string), [])
 
+    def reina_string(self):
+        d = self.donor()
+        tpl = TS.assault_template(d.t, d.aliases)
+        r = self.reqs
+        finisher = d.move('Zbr_3LPRP', first_active=22, last_active=23,
+            hit_condition=d.hits((r['bound'], 20, self.r_bound), (r['air'], 20, self.r_air),
+                                 (r['never'], 20, self.r_ground)),
+            cancel=d.cancels(dict(req=r['always'], extradata=7, move_id=STANCE), d.end()),
+            extraprops=d.props())
+        parent = d.move('Zbr_3LP', cancel=d.cancels(
+            dict(button=0x40000002, req=r['hit'], extradata=3, win_start=1, win_end=20,
+                 start_frame=15, move_id=finisher), d.end()), extraprops=d.props())
+        def string(name):
+            d.names.append(name)
+            return len(d.names)-1
+        made = TS.add_tag_assault(d.t, tpl, finisher,
+            lambda i: d.names[d.t['moves'][i]['name']], string, finish_hit=('Zbr_3LPRP',))
+        return d, parent, finisher, made
+
+    def test_tagged_string_finisher_cannot_return_before_its_second_hit(self):
+        d, parent, finisher, made = self.reina_string()
+        _, twin, exit_move = made[0]
+        original = TS.cancels(d.t, d.t['moves'][finisher]['cancel'])[0]
+        self.assertEqual(original['win_start'], 1)
+        tagged = TS.cancels(d.t, d.t['moves'][twin]['cancel'])
+        self.assertEqual(tagged[0]['move_id'], exit_move)
+        self.assertTrue(TS.has(d.t, tagged[0]['req'], TS.ASSAULT_EXIT))
+        self.assertTrue(all(c['win_start'] > 23 for c in tagged[1:-1]))
+        self.assertEqual(d.t['moves'][twin]['first_active'], 22)
+
+    def test_two_plus_tag_keeps_string_timing_contact_and_ordinary_two(self):
+        d, parent, finisher, made = self.reina_string()
+        before = copy.deepcopy(TS.cancels(d.t, d.t['moves'][parent]['cancel']))
+        self.assertEqual(TS.add_tag_assault_strings(d.t, made, {parent: {finisher}}), 1)
+        rows = TS.cancels(d.t, d.t['moves'][parent]['cancel'])
+        self.assertEqual(rows[0]['button'], 0x40000102)
+        self.assertEqual(rows[0]['move_id'], made[0][1])
+        self.assertEqual((rows[0]['win_start'], rows[0]['win_end'], rows[0]['start_frame']), (1,20,15))
+        self.assertTrue(set(TS.reqs(d.t, before[0]['req'])) <= set(TS.reqs(d.t, rows[0]['req'])))
+        self.assertEqual(rows[1:], before)
+
+    def test_tag_string_rejects_a_missing_or_non_bound_finisher(self):
+        d, parent, finisher, made = self.reina_string()
+        with self.assertRaisesRegex(ValueError, 'no Tag Assault twin'):
+            TS.add_tag_assault_strings(d.t, [], {parent: {finisher}})
+        with self.assertRaisesRegex(ValueError, 'not found'):
+            TS.add_tag_assault_strings(d.t, made, {parent: {12345}})
+
     def test_no_triple(self):
         d = self.donor()
         for x in (1, 4):
@@ -375,3 +423,41 @@ class Hubs(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GroundedScrewBound(unittest.TestCase):
+    def test_grounded_launches_only_and_shared_properties_preserved(self):
+        names = ['sDw_screwL', 'sDw_screwRR', 'sDw_AIR_SPINL', 'dwup_hei_xe_ex']
+        original = [dict(frame=0x8001, id=0x8193, value=0),
+                    dict(frame=10, id=0x812a, value=3600),
+                    dict(frame=0, id=0, value=0)]
+        tables = {'moves': [dict(extraprops=0) for _ in names],
+                  'extra_move_properties': [dict(r) for r in original]}
+        self.assertEqual(TS.preserve_grounded_screw_bound(tables, names.__getitem__), [0, 1])
+        self.assertEqual(tables['extra_move_properties'][:3], original)
+        for move in tables['moves'][:2]:
+            at = move['extraprops']
+            self.assertEqual(tables['extra_move_properties'][at:at+2], original[1:])
+        self.assertEqual([m['extraprops'] for m in tables['moves'][2:]], [0, 0])
+        self.assertEqual(TS.preserve_grounded_screw_bound(tables, names.__getitem__), [])
+
+class RunningContacts(unittest.TestCase):
+    def test_donor_contact_gates_restored_without_copying_attacks(self):
+        import copy
+        names=['sRUN__01F','Co_runtac00','character_wr3']
+        end=dict(direction=M.LIST_END,button=0,req=0,extradata=0,win_start=0,win_end=0,start_frame=0,move_id=0,option=0)
+        contact=dict(end,direction=0,req=1,win_start=1,win_end=32767,start_frame=1,move_id=1)
+        attack=dict(contact,button=0x40000004,move_id=2)
+        donor=dict(moves=[dict(cancel=0),dict(cancel=2),dict(cancel=2)],cancels=[contact,attack,end],
+                   requirements=[dict(condition=TS.TT_END,param=0),dict(condition=122,param=0),dict(condition=TS.TT_END,param=0)],
+                   cancel_extras=[dict(value=0x182)])
+        live=copy.deepcopy(donor);live['cancels']=[attack,end];live['moves'][0]['cancel']=0
+        before=copy.deepcopy(live)
+        self.assertEqual(TS.restore_running_contacts(live,names.__getitem__,donor,names.__getitem__),1)
+        rows=TS.cancels(live,live['moves'][0]['cancel'])
+        self.assertEqual(len(rows),3)
+        self.assertEqual(rows[0],attack)
+        self.assertEqual(TS.reqs(live,rows[1]['req']),[(122,0)])
+        self.assertEqual(rows[1]['move_id'],1)
+        self.assertEqual(live['cancels'][:2],before['cancels'])
+        self.assertEqual(TS.restore_running_contacts(live,names.__getitem__,donor,names.__getitem__),0)

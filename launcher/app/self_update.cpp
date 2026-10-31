@@ -13,6 +13,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -297,12 +298,28 @@ void Launcher::release_known(const ReleaseAnswer& answer) {
 
 void Launcher::show_update_notice() {
     const bool shown = appimage_ && newer_;
-    gtk_widget_set_visible(update_notice_, shown);
+    // Else newer changes on main, until a release brings them (no Update then).
+    const bool main = !shown && main_news_ && main_news_->ahead > 0;
+    gtk_widget_set_visible(update_notice_, shown || main);
+    gtk_widget_set_visible(update_notice_button_, shown);
+    if (main) {
+        const MainNews& news = *main_news_;
+        ui::set_text(update_notice_title_, "Newer changes are on main");
+        ui::set_text(update_notice_detail_,
+                     std::to_string(news.ahead) + (news.ahead == 1 ? " change" : " changes") +
+                         " since this version (" TTT2_LAUNCHER_VERSION ", " + build_commit_.substr(0, 7) + ")" +
+                         (news.changes.empty() ? "" : ", the newest: \u201c" + news.changes[0] + "\u201d") +
+                         ". They come with the next release.");
+        notice_link_ = news.page;
+        const char* custom = std::getenv("TTT2_LAUNCHER_GITHUB");
+        gtk_widget_set_visible(update_notice_page_, news.page.starts_with("https://") || (custom && *custom));
+    }
     if (shown) {
         gtk_widget_add_css_class(update_button_, "update-available");
         ui::set_text(update_notice_title_, "Version " + newer_->version + " of the launcher is out");
         ui::set_text(update_notice_detail_,
                      "You have " TTT2_LAUNCHER_VERSION ". Update replaces this AppImage with it and opens it.");
+        notice_link_ = newer_->page;
         gtk_widget_set_visible(update_notice_page_,
                                newer_->page.starts_with("https://") || (custom_releases() && !newer_->page.empty()));
         gtk_widget_set_sensitive(update_notice_button_, !task_);
@@ -314,9 +331,42 @@ void Launcher::show_update_notice() {
     }
 }
 
+void Launcher::check_main() {
+    if (build_commit_.empty() || importer_.empty() || python_.empty() || main_checking_) return;
+    std::vector<std::string> argv = importer_command("launcher.py");
+    argv.insert(argv.end(), {"main", "--commit", build_commit_});
+    auto out = std::make_shared<std::string>();
+    auto err = std::make_shared<std::string>();
+    std::string error;
+    main_checking_ = true;
+    const auto process = Process::start(
+        argv, importer_environment(),
+        {[out, err](const std::string& line, bool is_error) { (is_error ? *err : *out) += line + "\n"; },
+         [this, out, err](int) {
+             main_checking_ = false;
+             // (Quietly: no notice when GitHub cannot be asked now, or does not know this build.)
+             MainNews news = parse_main_news(*out);
+             if (!news.error.empty()) {
+                 std::fprintf(stderr, "ttt2-launcher: main: %s\n", news.error.c_str());
+             } else {
+                 main_news_ = std::move(news);
+                 show_update_notice();
+                 show_characters();
+             }
+             settled();
+         }},
+        &error);
+    if (!process) main_checking_ = false;
+}
+
+bool Launcher::newer_on_main(const std::string& fighter) const {
+    return main_news_ && std::find(main_news_->fighters.begin(), main_news_->fighters.end(), fighter) !=
+                             main_news_->fighters.end();
+}
+
 void Launcher::open_release_page() {
-    if (!newer_ || newer_->page.empty()) return;
-    GtkUriLauncher* page = gtk_uri_launcher_new(newer_->page.c_str());
+    if (notice_link_.empty()) return;
+    GtkUriLauncher* page = gtk_uri_launcher_new(notice_link_.c_str());
     gtk_uri_launcher_launch(page, GTK_WINDOW(window_), nullptr, nullptr, nullptr);
     g_object_unref(page);
 }

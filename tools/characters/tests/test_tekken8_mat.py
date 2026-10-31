@@ -200,6 +200,30 @@ class Materials(unittest.TestCase):
         self.assertIn(material.SHEER, material.unpainted(colours))
         self.assertEqual(material.unpainted(None), {})
 
+    def test_scalp_on_the_face_part_only(self):
+        """With the face part's materials named (costume.py), a skin with IsFace that is not among them (Azucena's
+        body skins inherit the switch from her face's) gets no scalp painting."""
+        scalp = {material.HAIR_SCALP_MASK: '/Game/h/T_SCM.T_SCM'}
+        face = self.m.effective(FACE, {material.SCALP: scalp, material.FACE: {'MI_CH_zbr_face_skin'}})
+        self.assertIn(material.HAIR_SCALP_MASK, face['textures'])
+        body = self.m.effective(FACE, {material.SCALP: scalp, material.FACE: {'MI_CH_zbr_fac_other'}})
+        self.assertTrue(body['switches']['IsFace'])
+        self.assertNotIn(material.HAIR_SCALP_MASK, body['textures'])
+
+    def test_customize_pattern(self):
+        props = {'DesignAssignSlotArray': [], 'AssignPerMaterialArray': [{
+            'MaterialAssign_Preview': CHILD + '.MI_CH_zbr_outerwear', 'DesignAssignArray': [
+                {'isEnableId': True, 'useSlotNumber': -1, 'DesignAssign_Color': {
+                    'Assign_Color': rgba(0.9, 0.0, 0.1), 'Assign_DontColor': 4.0},
+                 'DesignAssign_Pattern': {'Assign_Pattern': '/Game/T/T_PC.T_PC', 'Assign_PatternSaturation': -1.0}},
+                {'isEnableId': True, 'useSlotNumber': -1, 'DesignAssign_Color': {'Assign_Color': rgba(0, 0, 0)},
+                 'DesignAssign_Pattern': {'Assign_Pattern': '/Game/T/T_Other.T_Other'}}]}]}
+        c = material.customize_colours(props)['MI_CH_zbr_outerwear']
+        self.assertEqual(c['ID01_DontColorOP'], 4.0)
+        self.assertEqual(c[material.PATTERN], '/Game/T/T_PC.T_PC')              # the first ID's (one layer)
+        self.assertEqual(c[bake.PATTERN_SATURATION], -1.0)
+        self.assertEqual(c[bake.PATTERN_HUE], 0.0)
+
     def test_not_a_costume(self):
         with self.assertRaises(InputError):
             self.m.costume_colours(CHILD)
@@ -390,6 +414,29 @@ class Bakes(unittest.TestCase):
         eff = costume_eff(colours={'ID01_Color': col(*purple)}, scalars={'ID01_DontColorOP': 1.0})
         rgb, _ = bake.bake_albedo(eff, tex)
         np.testing.assert_allclose(rgb[0, 0], [L, L, L], rtol=1e-4)                 # DontColor: back to the detail
+        for op, coloured in ((2.0, False), (4.0, True), (10.0, True)):  # the shader: >= 4 colours, else saturate
+            eff = costume_eff(colours={'ID01_Color': col(*purple)}, scalars={'ID01_DontColorOP': op})
+            rgb, _ = bake.bake_albedo(eff, tex)
+            np.testing.assert_allclose(rgb[0, 0], np.array(purple) * L * gain if coloured else [L, L, L], rtol=1e-4)
+
+    def test_pattern(self):
+        purple = (0.25, 0.13, 0.92)
+        p = np.zeros((1, 3, 4), np.uint8)
+        p[0, 0] = (255, 0, 0, 255)                                       # opaque red
+        p[0, 1] = (0, 0, 255, 0)                                         # transparent: the colour stays
+        p[0, 2] = (0, 0, 255, 255)                                       # outside every ID: the detail stays
+        tex = Textures({'A': flat(1, 3, GREY, GREY, GREY), 'ID': id_map([(255, 0, 0, 0)] * 2 + [(0, 0, 0, 0)]),
+                        'P': (p, False)})
+        eff = costume_eff(colours={'ID01_Color': col(*purple)}, scalars={'ID01_DontColorOP': 4.0},
+                          textures={'Pattern': 'P'})
+        rgb, _ = bake.bake_albedo(eff, tex)
+        np.testing.assert_allclose(rgb[0, 0], [1, 0, 0], atol=1e-6)
+        np.testing.assert_allclose(rgb[0, 1], np.array(purple) * LIN * (1 + 20 * 0.02), rtol=1e-4)
+        np.testing.assert_allclose(rgb[0, 2], [LIN, LIN, LIN], rtol=1e-4)
+        eff['scalars'][bake.PATTERN_SATURATION] = -1.0                   # Azucena's leggings: the pattern greyed
+        np.testing.assert_allclose(bake.bake_albedo(eff, tex)[0][0, 0], [0.299] * 3, atol=1e-6)
+        eff['scalars'][bake.PATTERN_BRIGHTNESS] = 0.5                    # half way to white
+        np.testing.assert_allclose(bake.bake_albedo(eff, tex)[0][0, 0], [0.6495] * 3, atol=1e-6)
 
     def test_masked_and_sheer(self):
         tex = Textures({'A': flat(2, 2, GREY, GREY, GREY), 'ID': id_map([(255, 0, 0, 0)] * 2),
@@ -415,12 +462,15 @@ class Bakes(unittest.TestCase):
         eff = {'name': 'MI_CH_zbr_face_skin', 'base': 'M_CH_skin_V3', 'textures': {
             'tx01_BaseColor': 'C', 'tx11_ScalpMask': 'SCM', material.HAIR_SCALP_MASK: 'HAIR'},
             'vectors': {'TintColor': col(1.0, 0.5, 0.5), 'ScalpColor_Eyebrow': col(0.1, 0.05, 0.0),
-                        material.SCALP_COLOUR: col(0.01, 0.01, 0.01)}, 'scalars': {}, 'overrides': {}}
+                        material.SCALP_COLOUR: col(0.01, 0.01, 0.01)}, 'scalars': {}, 'overrides': {},
+            'switches': {'IsFace': True}}
         rgb, alpha = bake.bake_albedo(eff, tex)
         self.assertIsNone(alpha)
         np.testing.assert_allclose(rgb[0, 1], [LIN, LIN / 2, LIN / 2], rtol=1e-5)   # colour x TintColor
         np.testing.assert_allclose(rgb[0, 0], [0.1, 0.05, 0.0], atol=1e-6)
         np.testing.assert_allclose(rgb[1, 1], [0.01, 0.01, 0.01], atol=1e-6)
+        body = dict(eff, switches={'IsFace': False})                     # (a body skin naming a face's mask)
+        np.testing.assert_allclose(bake.bake_albedo(body, tex)[0][0, 0], [LIN, LIN / 2, LIN / 2], rtol=1e-5)
         self.assertEqual(bake.classify(eff['name'], eff, None), ('skin', True, False))
 
     def test_hair(self):

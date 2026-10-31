@@ -1,0 +1,22 @@
+{
+  "Vulkan-Headers": {
+    "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+    "revision": "73814d006638aa00bd553215b054f0f02e457e22"
+  },
+  "shaderc": {
+    "url": "https://github.com/google/shaderc.git",
+    "revision": "c4a078825d43a8c0bab5d5e3f5e0ba63754c4e61"
+  },
+  "shaderc/third_party/glslang": {
+    "url": "https://github.com/KhronosGroup/glslang.git",
+    "revision": "73b25650df6dc4545966674531e6b7cc8f5d2407"
+  },
+  "shaderc/third_party/spirv-headers": {
+    "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+    "revision": "86f980c731e62ae4eaf383d320449d71687936bf"
+  },
+  "shaderc/third_party/spirv-tools": {
+    "url": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+    "revision": "71f287f18ed78d496e724fbfb1c3feae3a2af75a"
+  }
+}

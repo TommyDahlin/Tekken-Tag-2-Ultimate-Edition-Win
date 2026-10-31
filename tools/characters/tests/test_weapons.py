@@ -78,6 +78,34 @@ class Weapons(unittest.TestCase):
         self.assertIn('weapons = 1:1:0,1\n', ini)
         self.assertEqual(weapons.points_of(s['names']), {0x6f: 0x46, 0x70: 0x47})
 
+    def test_private_extended_tip_preserves_existing_contact_points(self):
+        skel=fighter()
+        t7=tekken7(bone.world_matrices(skel)[1],np.eye(3))
+        w=dict(bone='ATH_R_weapon001',parent='TE_R_jnt',pair=4,
+               points={0x63:('ATH_R_weapon001_top',0),
+                       0xfe:({'bone':'ATH_R_weapon001_top','extend_cm':30},3)})
+        s,index,_,_=weapons.append_bones(skel,t7,w)
+        world=bone.world_matrices(bone.read(bone.write(s)))
+        axis=(np.asarray(t7['world'][1])@SWAP)[:3,0]/0.95
+        self.assertTrue(np.allclose(world[index+1][:3,3],np.asarray(t7['world'][2])[:3,3],atol=1e-2))
+        self.assertTrue(np.allclose(world[index+2][:3,3]-world[index+1][:3,3],axis*300,atol=1e-2))
+        self.assertEqual(weapons.points_of(s['names']),{0x63:70,0xfe:73})
+
+    def test_private_parent_local_collision_point_ignores_weapon_bind_axes(self):
+        skel = fighter()
+        hand = bone.world_matrices(skel)[1]
+        t7 = tekken7(hand, np.diag([1., -1., 1.]))
+        offset = np.array([87.5, -313.7, 128.2])
+        w = dict(bone='ATH_R_weapon001', parent='TE_R_jnt', pair=None,
+                 points={0xfe: ({'parent_local_offset': tuple(offset)}, 1)})
+        s, index, _, _ = weapons.append_bones(skel, t7, w)
+        world = bone.world_matrices(bone.read(bone.write(s)))
+        self.assertTrue(np.allclose(world[index+1][:3,3], hand[:3,3] + hand[:3,:3] @ offset, atol=1e-2))
+        self.assertTrue(np.array_equal(s['t'][:2], skel['t']))
+        self.assertEqual(weapons.points_of(s['names']), {0xfe:71})
+        with self.assertRaises(ValueError):
+            weapons.append_bones(skel, t7, dict(w, points={0xfe:({'parent_local_offset':(float('nan'),0,0)},1)}))
+
     def test_still_weapons_and_limits(self):
         skel = fighter()
         t7 = tekken7(bone.world_matrices(skel)[1], np.eye(3))

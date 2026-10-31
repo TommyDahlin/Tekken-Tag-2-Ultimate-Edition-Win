@@ -101,6 +101,11 @@ target_link_libraries(title_test PRIVATE cafe_title)
 target_compile_options(title_test PRIVATE -Wall -Wextra)
 add_test(NAME title_test COMMAND title_test)
 
+add_executable(damage_scaling_test damage_scaling_test.cpp)
+target_include_directories(damage_scaling_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_options(damage_scaling_test PRIVATE -Wall -Wextra)
+add_test(NAME damage_scaling_test COMMAND damage_scaling_test)
+
 # The keyboard's keys from keyboard.ini and its reloading (files in a
 # scratch folder of the build tree; SDL only for its key names).
 find_package(SDL3 REQUIRED CONFIG)
@@ -151,3 +156,23 @@ if(Python3_Interpreter_FOUND)
         message(STATUS "character_import_test disabled: needs Python 3 with numpy and Pillow")
     endif()
 endif()
+
+# Outfit namespace validation and loader/menu state transitions, without game assets.
+add_executable(outfit_menu_test outfit_menu_test.cpp)
+target_include_directories(outfit_menu_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_features(outfit_menu_test PRIVATE cxx_std_20)
+target_compile_options(outfit_menu_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME outfit_menu_test COMMAND outfit_menu_test)
+
+# Eliza's scoped native Tag Assault lifetime; no game assets required.
+add_executable(eliza_assist_test eliza_assist_test.cpp)
+target_include_directories(eliza_assist_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_features(eliza_assist_test PRIVATE cxx_std_20)
+target_compile_options(eliza_assist_test PRIVATE -UNDEBUG -Wall -Wextra)
+add_test(NAME eliza_assist_test COMMAND eliza_assist_test)
+
+add_executable(noctis_assault_test noctis_assault_test.cpp)
+target_include_directories(noctis_assault_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_features(noctis_assault_test PRIVATE cxx_std_20)
+target_compile_options(noctis_assault_test PRIVATE -UNDEBUG -Wall -Wextra)
+add_test(NAME noctis_assault_test COMMAND noctis_assault_test)

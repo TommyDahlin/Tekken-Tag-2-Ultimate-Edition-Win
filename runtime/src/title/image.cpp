@@ -1,6 +1,7 @@
 #include "title/image.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace cafe::title {
@@ -58,6 +59,51 @@ void alpha_block(const uint8_t* block, uint8_t (&texels)[16][4]) {
 }
 
 } // namespace
+
+std::vector<float> distance(const std::vector<uint8_t>& set, uint32_t width, uint32_t height) {
+    constexpr double kFar = 1e20;
+    const size_t w = width, h = height, longest = std::max(w, h);
+    std::vector<double> d(w * h), f(longest), z(longest + 1);
+    std::vector<size_t> v(longest);
+    for (size_t i = 0; i < d.size(); ++i) d[i] = set[i] ? 0 : kFar;
+    const auto pass = [&](size_t count, size_t length, size_t step, size_t stride) {
+        for (size_t c = 0; c < count; ++c) {
+            double* line = d.data() + c * stride;
+            for (size_t i = 0; i < length; ++i) f[i] = line[i * step];
+            // Parabola v[k] is lowest from z[k] to z[k + 1]. Where two
+            // meet lies within (-kFar / 2, kFar / 2), so z[0] is never
+            // passed.
+            size_t k = 0;
+            v[0] = 0;
+            z[0] = -kFar;
+            z[1] = kFar;
+            for (size_t q = 1; q < length; ++q) {
+                const auto meet = [&](size_t p) {
+                    const double qd = static_cast<double>(q), pd = static_cast<double>(p);
+                    return (f[q] + qd * qd - f[p] - pd * pd) / (2 * qd - 2 * pd);
+                };
+                double s = meet(v[k]);
+                while (s <= z[k]) s = meet(v[--k]);
+                ++k;
+                v[k] = q;
+                z[k] = s;
+                z[k + 1] = kFar;
+            }
+            k = 0;
+            for (size_t q = 0; q < length; ++q) {
+                while (z[k + 1] < static_cast<double>(q)) ++k;
+                const double dq = static_cast<double>(q) - static_cast<double>(v[k]);
+                line[q * step] = dq * dq + f[v[k]];
+            }
+        }
+    };
+    pass(h, w, 1, w); // rows
+    pass(w, h, w, 1); // columns
+    std::vector<float> out(d.size());
+    for (size_t i = 0; i < d.size(); ++i) out[i] = static_cast<float>(std::sqrt(d[i]));
+    return out;
+}
+
 
 Rgba blank(uint32_t width, uint32_t height) {
     Rgba image;

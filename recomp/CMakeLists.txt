@@ -1,5 +1,9 @@
-find_package(ZLIB REQUIRED)
-find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+endif()
+if(NOT WIN32)
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+endif()
 
 # RPX loading is shared with the runtime so both place the image identically.
 add_library(cafe_rpx STATIC src/rpx.cpp)
@@ -22,7 +26,12 @@ target_link_libraries(cafe-census PRIVATE cafe_recomp)
 target_compile_options(cafe-census PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(cafe-recomp src/recompile_main.cpp)
-target_link_libraries(cafe-recomp PRIVATE cafe_recomp OpenSSL::Crypto)
+target_link_libraries(cafe-recomp PRIVATE cafe_recomp)
+if(WIN32)
+    target_link_libraries(cafe-recomp PRIVATE bcrypt)
+else()
+    target_link_libraries(cafe-recomp PRIVATE OpenSSL::Crypto)
+endif()
 target_compile_options(cafe-recomp PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(cafe-semgen src/semgen_main.cpp)

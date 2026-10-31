@@ -1,0 +1,76 @@
+# Adapted from verqion PR #19; tests never require copyrighted game files.
+name: Build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    name: Linux (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang, gcc]
+    steps:
+      - name: Install build dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed git cmake ninja clang gcc python
+          python-numpy python-pillow zstd zlib openssl vulkan-headers
+          vulkan-icd-loader sdl3 shaderc gtk4 mingw-w64-gcc
+      - uses: actions/checkout@v6
+      - run: python tools/setup_deps.py
+      - name: Configure Linux build
+        shell: bash
+        run: |
+          if [[ "${{ matrix.compiler }}" == clang ]]; then cc=clang; cxx=clang++; else cc=gcc; cxx=g++; fi
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx"
+      - run: cmake --build build-linux --parallel 2
+      - run: ctest --test-dir build-linux --output-on-failure --timeout 180
+      - run: python launcher/windows/test_backend.py
+      - run: python launcher/windows/test_setup.py
+      - run: python launcher/windows/test_self_update.py
+      - run: python launcher/windows/test_keys.py
+      - name: Windows release launcher
+        # (Git refuses a repository another user owns: the checkout's, here in a container run as root.)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python launcher/windows/make_launcher_exe.py build-linux/Ultimate_Launcher-x86_64.exe
+  windows:
+    name: Windows portable tools and importer
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            git mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-python-numpy
+            mingw-w64-clang-x86_64-python-pillow mingw-w64-clang-x86_64-sdl3
+      - run: python tools/setup_deps.py
+      - name: Configure native Windows tools without game files
+        run: cmake -S . -B build-windows-ci -G Ninja -DTTT2_TOOLS_ONLY=ON -DTTT2_WINDOWS_RUNTIME=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build-windows-ci --parallel 2
+      - run: ctest --test-dir build-windows-ci --output-on-failure --timeout 120
+      - run: python tools/test_character_importer.py
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Windows launcher window smoke test
+        shell: pwsh
+        run: >-
+          python launcher/windows/main.py --build-dir build-windows-ci
+          --config "$env:RUNNER_TEMP/ttt2-launcher-test.json"
+          --ui-smoke-test "$env:RUNNER_TEMP/ttt2-launcher-ui.json"
+      - name: Source ZIP first-run runtime check
+        shell: cmd
+        run: call "Start Ultimate Launcher.cmd" --check

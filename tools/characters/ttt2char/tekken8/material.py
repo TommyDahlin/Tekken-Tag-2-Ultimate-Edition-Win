@@ -19,9 +19,14 @@ material takes slot useSlotNumber's colour and DontColor (its own when -1) as ID
 unless the ID is off (isEnableId) or keeps the material's own values (isUseSourceMaterial). A hair material (M_Hair*:
 hair, brows, lashes) has no ID parameters: ID 1 is its RootColor and ID 2 its TipColor (CI_zbr_har_1p's equal
 MI_CH_zbr_har_1p's own). The hue shifts (Assign_EnableChangeHue ...) are off in the default costumes and not applied.
-Two entries apply to materials by kind rather than name: SCALP, for the face skin (static switch IsFace): the hair's
-BaseItem names a scalp mask in the face's UV layout (HairScalpMask), painted with the hair's root colour
-(ScalpColor_Hair01; bake.py); SHEER, for sheer cloth (ShadingModel Subsurface): the colour of the skin under it.
+An ID with a pattern (DesignAssign_Pattern: Azucena's leggings, top and jacket) gives the material its Pattern texture
+and the pattern's hue, saturation and brightness (bake.py's pattern layer; the first such ID's: the shader has one).
+Two entries apply to materials by kind rather than name: SCALP, for the face skin: the hair's BaseItem names a scalp
+mask in the face's UV layout (HairScalpMask), painted with the hair's root colour (ScalpColor_Hair01; bake.py), on the
+materials FACE names (costume.py: the face part's), else on those with the static switch IsFace (half of Tekken 8's
+body skins have it too, inherited from the face skin or their own: Azucena's arms, body, hands and feet were painted
+with her hair's scalp in their own UV layouts); SHEER, for sheer cloth (ShadingModel Subsurface): the colour of the
+skin under it.
 
 Written for this project from the files themselves (no third-party code).
 """
@@ -30,7 +35,7 @@ import struct
 import numpy as np
 
 from .. import InputError
-from . import texture, uprops, zen
+from . import bake, texture, uprops, zen
 
 # Material class defaults (a property a package leaves out has its class default)
 MATERIAL_DEFAULTS = {'BlendMode': 0, 'TwoSided': False, 'OpacityMaskClipValue': 1.0 / 3.0, 'ShadingModel': 1}
@@ -48,6 +53,9 @@ SCALP = '*scalp'                    # colours entry: the hair's scalp painting, 
 HAIR_SCALP_MASK = 'HairScalpMask'   # (the BaseItem property's name) the hair's mask, painted ScalpColor_Hair01
 SCALP_COLOUR = 'ScalpColor_Hair01'  # the face skin's colour for its scalp mask's alpha (the hair's root colour)
 SHEER = '*sheer'                    # colours entry for sheer cloth (ShadingModel Subsurface): the skin colour under it
+FACE = '*face'                      # colours entry: the face part's material names (the ones SCALP paints)
+PATTERN = 'Pattern'                 # the costume shader's pattern texture, and the costume's adjustments of it
+PATTERN_ADJUSTMENTS = (bake.PATTERN_HUE, bake.PATTERN_SATURATION, bake.PATTERN_BRIGHTNESS)
 SHADING_SUBSURFACE = 2              # EMaterialShadingModel MSM_Subsurface
 # normal map parameter by base material family (the key Tekken 7's vocabulary calls Normal)
 NORMALS = ('BaseNormal_A', 'tx04_Normal', 'Normal', 'NormalMap', 'tx02_Normal')
@@ -213,7 +221,8 @@ class Materials:
                 props.update(m['overrides'])
         eff['overrides'] = props
         params = {}
-        if eff['switches'].get('IsFace'):                 # the hair's scalp painting (face skin only)
+        faces = (colours or {}).get(FACE)                 # the hair's scalp painting (face skin only)
+        if (eff['name'] in faces) if faces is not None else eff['switches'].get('IsFace'):
             params.update((colours or {}).get(SCALP) or {})
         if props['ShadingModel'] == SHADING_SUBSURFACE:   # sheer cloth: the skin under it
             params.update((colours or {}).get(SHEER) or {})
@@ -319,6 +328,11 @@ def customize_colours(props, materials=None):
                 continue
             params['ID%02d_Color' % (i + 1)] = c
             params['ID%02d_DontColorOP' % (i + 1)] = float(src.get('Assign_DontColor', 0.0))
+            pattern = a.get('DesignAssign_Pattern') or {}
+            if pattern.get('Assign_Pattern') and PATTERN not in params:     # (the material has one pattern layer)
+                params[PATTERN] = pattern['Assign_Pattern']
+                for key in PATTERN_ADJUSTMENTS:
+                    params[key] = float(pattern.get(key, 0.0))
         for name in {short(target), short(m.get('MaterialAssign_Preview'))}:
             if name:
                 out.setdefault(name, {}).update(params)

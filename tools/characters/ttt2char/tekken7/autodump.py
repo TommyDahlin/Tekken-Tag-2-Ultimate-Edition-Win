@@ -28,9 +28,10 @@ supported yet).
 Written for this project (no third-party code).
 """
 import atexit
-import csv
 import hashlib
 import os
+if os.name != 'nt':
+    import fcntl
 import re
 import secrets
 import shutil
@@ -40,7 +41,7 @@ import subprocess
 import tempfile
 import time
 
-from .. import signals
+from .. import signals, paths
 from .pak import plain
 
 WINDOWS = os.name == 'nt'
@@ -65,18 +66,10 @@ DLC = {36: 592370, 43: 592373, 44: 592374, 45: 878460, 46: 878461, 47: 878462, 4
 RECORD_MOVELIST = 0x68                          # a fighter record's command list: written last, once all is loaded
 COMMON_ANIMATIONS = 0x38
 # the movesets saved from the game, and the encrypted files as the game reads them (pak paths below it)
-if WINDOWS:
-    _data_root = os.path.join(os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'), 'ttt2')
-else:
-    _data_root = os.path.join(os.path.expanduser('~/.local/share'), 'ttt2')
-MOVESETS = os.path.join(_data_root, 'tekken7', 'movesets')
-FILES = os.path.join(_data_root, 'tekken7', 'files')
+MOVESETS = paths.movesets()
+FILES = os.path.join(paths.data_root(), 'tekken7', 'files')
 # the helper's build and its run's logs: $XDG_CACHE_HOME/ttt2 as the game's and the launcher's caches
-if WINDOWS:
-    _cache_root = os.path.join(os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'), 'ttt2', 'cache')
-else:
-    _cache_root = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
-CACHE = os.path.join(_cache_root, 'ttt2', 'tekken7') if not WINDOWS else os.path.join(_cache_root, 'tekken7')
+CACHE = paths.cache_root()
 FILE_BATCH = 64                                 # files the game reads at once (the helper takes up to 256) ...
 FILE_BATCH_BYTES = 96 << 20                     # ... and their size together, in the game's memory meanwhile
 WINDOWS_FILE_BATCH = 8                          # native Windows needs smaller encrypted-file chunks
@@ -140,6 +133,9 @@ def _libraries(steam, sandbox=None):
 
 
 def steams():
+    if os.name == 'nt':
+        from .windows import steam_roots
+        return [(p, None) for p in steam_roots()]
     """[(Steam's folder, None | 'flatpak' | 'snap')] of the Steams installed, in STEAMS' order (one entry per
     folder: ~/.steam/steam usually links to ~/.local/share/Steam)."""
     out, seen = [], set()
@@ -167,6 +163,9 @@ def _tekken7_library():
 
 
 def tekken7_library():
+    if os.name == 'nt':
+        t7 = find_tekken7()
+        return t7.steam, os.path.dirname(os.path.dirname(t7.game)), t7.game
     """(Steam's folder, the Steam library Tekken 7 is installed in, its installation folder), through Steam's files:
     all reading Tekken 7's files needs (find_tekken7: running it)."""
     steam, _, lib, game = _tekken7_library()
@@ -184,6 +183,9 @@ def tekken7_steam():
 
 
 def find_tekken7():
+    if os.name == 'nt':
+        from .windows import find_tekken7 as native_find
+        return native_find(Tekken7, DumpError)
     """Tekken 7's install, its Proton prefix and the Proton it uses, through Steam's files."""
     steam, sandbox, lib, game = _tekken7_library()
     if WINDOWS:
@@ -205,24 +207,9 @@ def find_tekken7():
 
 
 def _running(comm):
-    if WINDOWS:
-        name = comm.lower()
-        try:
-            proc = subprocess.run(
-                ['tasklist', '/FO', 'CSV', '/NH'],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        rows = csv.reader(line for line in proc.stdout.splitlines() if line.strip())
-        for row in rows:
-            if row and row[0].strip().lower() == name:
-                pid = row[1].strip() if len(row) > 1 else ''
-                return int(pid) if pid.isdigit() else 1
-        return None
+    if os.name == 'nt':
+        from .windows import running
+        return running(comm)
     for pid in os.listdir('/proc'):
         if pid.isdigit():
             try:
@@ -261,25 +248,13 @@ def build_helper(cache):
         return ready
     exe = os.path.join(cache, 't7helper.exe')
     src = os.path.normpath(HELPER_SOURCE)
-    candidates = [c for c in ('x86_64-w64-mingw32-gcc', 'gcc', 'clang') if shutil.which(c) is not None]
-    if not candidates:
-        if WINDOWS:
-            raise DumpError('building the helper needs a C compiler with Win32 support (try MSYS2 UCRT64 gcc/clang, '
-                            'or set TTT2_T7HELPER to a prebuilt t7helper.exe)')
+    gcc = (os.environ.get('TTT2_HELPER_CC') or shutil.which('clang') or shutil.which('gcc')) if os.name == 'nt' else shutil.which('x86_64-w64-mingw32-gcc')
+    if gcc is None:
         raise DumpError('building the helper needs MinGW (x86_64-w64-mingw32-gcc; Arch: mingw-w64-gcc, '
                         'Debian/Ubuntu: gcc-mingw-w64-x86-64)')
     os.makedirs(cache, exist_ok=True)
-    errors = []
-    for cc in candidates:
-        cmd = [cc, '-O2', '-mwindows', '-o', exe, src, '-lws2_32']
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode == 0 and os.path.isfile(exe):
-            return exe
-        stderr = (proc.stderr or '').strip()
-        stdout = (proc.stdout or '').strip()
-        details = stderr or stdout or ('exit code %d' % proc.returncode)
-        errors.append('%s: %s' % (cc, details))
-    raise DumpError('could not build t7helper.exe:\n' + '\n'.join(errors))
+    subprocess.run([gcc, '-O2', '-mwindows', '-static', '-o', exe, src, '-lws2_32'], check=True)
+    return exe
 
 
 # ---------------------------------------------------------------- the helper
@@ -433,13 +408,14 @@ def _lock_path(prefix):
     folder = os.environ.get('XDG_RUNTIME_DIR') if not WINDOWS else os.environ.get('LOCALAPPDATA')
     if not folder or not os.path.isdir(folder):
         folder = tempfile.gettempdir()
-    name_source = os.path.realpath(prefix) if prefix else os.path.realpath(__file__)
-    name = hashlib.sha1(name_source.encode('utf-8', 'surrogateescape')).hexdigest()[:16]
-    owner = str(os.getuid()) if hasattr(os, 'getuid') else str(os.getpid())
-    return os.path.join(folder, 'ttt2-tekken7-%s-%s.lock' % (owner, name))
+    name = hashlib.sha1(os.path.realpath(prefix).encode('utf-8', 'surrogateescape')).hexdigest()[:16]
+    return os.path.join(folder, 'ttt2-tekken7-%d-%s.lock' % (getattr(os, 'getuid', lambda: 0)(), name))
 
 
 def _lock(path, timeout=300):
+    if os.name == 'nt':
+        from .windows import lock
+        return lock(path, timeout, DumpError)
     """The prefix's lock, waited for: one session at a time (a session's end stops what it started in the prefix,
     and the launcher's check of the DLC must not end an import's session). Never a link's target (it may be in
     /tmp); not passed on to what the session starts, so it is free again as soon as this program has ended."""
@@ -565,6 +541,8 @@ def _players(prefix, processes):
 
 
 def tekken7_running(t7):
+    if os.name == 'nt':
+        return _running(GAME_COMM) is not None
     """Whether the player's own Tekken 7 runs (or is being started): a session would share its prefix."""
     if WINDOWS:
         return _running('TekkenGame-Win64-Shipping.exe') is not None
@@ -881,13 +859,10 @@ def owned_dlc(t7, helper_exe, run, allow_running=False):
     """{DLC app id: owned} as the game asks Steam."""
     if tekken7_running(t7) and not allow_running:                 # (Session checks again, once no other session runs)
         raise DumpError(RUNNING)
-    s = Session(t7, helper_exe, run, False, require_running=False)
+    s = session(t7, helper_exe, run, False)
     try:
         h = s.connect()
-        dll = os.path.join(t7.game, STEAMWORKS)
-        if not WINDOWS:
-            dll = 'Z:' + dll
-        return {a: owned for a, owned, _ in h.dlc(dll)}
+        return {a: owned for a, owned, _ in h.dlc(('' if os.name == 'nt' else 'Z:') + os.path.join(t7.game, STEAMWORKS))}
     finally:
         s.close()
 
@@ -930,17 +905,8 @@ def dump(fighters, out, log=print, cache=None, files=None, paks=None, attach_run
     cache = cache or CACHE
     run = os.path.join(cache, 'run')
     helper_exe = build_helper(cache)
-    if t7.proton:
-        log('Tekken 7: %s (Proton: %s)' % (t7.game, os.path.basename(t7.proton)))
-    else:
-        log('Tekken 7: %s (native Windows)' % t7.game)
-    owned = {}
-    try:
-        owned = owned_dlc(t7, helper_exe, run, allow_running=attach_running)
-    except DumpError as e:
-        if not (WINDOWS and attach_running):
-            raise
-        log('DLC ownership probe failed while attached to a running game; continuing without DLC ownership filter (%s).' % e)
+    log('Tekken 7: %s (%s)' % (t7.game, 'native Windows' if os.name == 'nt' else 'Proton: ' + os.path.basename(t7.proton)))
+    owned = owned_dlc(t7, helper_exe, run)
     names = dict(fighters)
     if names:
         names.setdefault(HEIHACHI, ('hei', 'Heihachi'))
@@ -956,11 +922,8 @@ def dump(fighters, out, log=print, cache=None, files=None, paks=None, attach_run
     dumped = {}
     if not wanted and not files:
         return dumped, skipped
-    if attach_running:
-        log('Attaching to the running Tekken 7 process ...')
-    else:
-        log('Starting Tekken 7 in the background ...')
-    s = Session(t7, helper_exe, run, not attach_running, require_running=attach_running)
+    log('Starting native Windows Tekken 7 (its window may appear) ...' if os.name == 'nt' else 'Starting Tekken 7 in the background (no window, no sound) ...')
+    s = session(t7, helper_exe, run, True)
     try:
         if not attach_running:
             s.wait_game()
@@ -1069,3 +1032,10 @@ def dump(fighters, out, log=print, cache=None, files=None, paks=None, attach_run
     finally:
         s.close()
     return dumped, skipped
+
+
+def session(*args):
+    if os.name == "nt":
+        from .windows import Session as NativeSession
+        return NativeSession(*args)
+    return Session(*args)

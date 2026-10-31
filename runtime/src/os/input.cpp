@@ -1,6 +1,9 @@
-// Controllers: the Wii U GamePad (vpad) is the one input device; its state
-// comes from the host (set_gamepad_state, fed by the window layer). No Wii
-// Remotes or Pro Controllers are connected (padscore: KPAD/WPAD).
+// Controllers: the Wii U GamePad (vpad) and up to four Pro Controllers
+// (padscore's KPAD, channels 0-3); their states come from the host
+// (set_gamepad_state, set_pro_controller_states, fed by the window layer).
+// No Wii Remotes are connected. The title reads the other controllers
+// through KPAD only (its calls of WPAD's own functions are in a library of
+// the title's that nothing runs).
 
 #include "kernel.h"
 
@@ -8,10 +11,14 @@
 #include "cafe/input.h"
 #include "cafe/vfs.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,9 +28,33 @@ namespace {
 std::mutex g_input_mutex;
 GamepadState g_gamepad{};
 uint32_t g_previous_hold = 0;
+std::array<std::optional<GamepadState>, kProControllers> g_pro{};
+
+// A Pro Controller's reads. Once connected, it shows no buttons for
+// kSettleReads reads, so that the title has seen it connect before it sees
+// a press (a player joins with the press of + that connected the
+// controller); what is pressed meanwhile is held for kHeldReads after.
+constexpr int kSettleReads = 3;
+struct ProReads {
+    int connected = -1; // reads since it connected; -1: not connected
+    uint32_t previous = 0, latched = 0;
+    int latched_reads = 0;
+};
+std::array<ProReads, kProControllers> g_pro_reads{};
+
+// set_input_step: reads to the next one the game sees change, buttons
+// pressed meanwhile.
+// It lasts a while unless set again (the mode sets it every frame; when its
+// frames stop, the pad goes back to usual).
+uint32_t g_step_every = 1, g_step_reads = 0, g_step_pressed = 0;
+bool g_step_delivered = true;
+std::chrono::steady_clock::time_point g_step_until{};
+constexpr auto kStepLasts = std::chrono::milliseconds(250);
 
 // TTT2_INPUT_SCRIPT="15:plus,20.5:a,22:down" presses each button at the given
-// second after start-up, for unattended runs: for a fifth of a second and at
+// second after start-up, for unattended runs; "30:plus#2" presses it on the
+// second controller (2-5: Pro Controllers 1-4, connected for the whole run
+// once the script names them; 1 is the GamePad): for a fifth of a second and at
 // least kHeldReads reads of the pad, then released for kReleasedReads reads
 // before the same button is pressed again, so a press is seen even when a frame
 // stalls (loading). An item "@3dbb1771" waits until the title reads the archive
@@ -37,6 +68,7 @@ struct ScriptedPress {
     double at;
     uint32_t button;
     size_t segment; // the anchors before it
+    int port;       // 0: the GamePad, 1-4: a Pro Controller's channel + 1
     int reads = -1; // reads of the pad while held; -1: not pressed yet
 };
 
@@ -45,7 +77,8 @@ struct Script {
     std::vector<uint32_t> anchors;
     std::mutex mutex;
     std::vector<double> starts; // each segment's start, after start-up; < 0 while waiting
-    std::vector<std::pair<uint32_t, int>> released; // button -> reads since its last scripted release
+    std::vector<std::pair<uint64_t, int>> released; // port << 32 | button -> reads since its last scripted release
+    std::array<bool, kProControllers> pro{};          // Pro Controllers the script uses
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 };
 
@@ -71,10 +104,17 @@ Script& load_script() {
         if (!item.empty() && item[0] == '@') {
             script.anchors.push_back(static_cast<uint32_t>(std::strtoul(item.c_str() + 1, nullptr, 16)));
         } else if (colon != std::string::npos) {
-            const std::string name = item.substr(colon + 1);
+            std::string name = item.substr(colon + 1);
+            int port = 0;
+            if (const size_t hash = name.find('#'); hash != std::string::npos) {
+                port = std::clamp(std::atoi(name.c_str() + hash + 1), 1, kProControllers + 1) - 1;
+                name.resize(hash);
+            }
+            if (port > 0) script.pro[port - 1] = true;
             for (const auto& [n, bit] : kNames) {
                 if (name == n) {
-                    script.presses.push_back({std::atof(item.substr(0, colon).c_str()), bit, script.anchors.size()});
+                    script.presses.push_back(
+                        {std::atof(item.substr(0, colon).c_str()), bit, script.anchors.size(), port});
                 }
             }
         }
@@ -95,21 +135,29 @@ Script& load_script() {
     return script;
 }
 
-uint32_t scripted_buttons() {
+Script& script() {
     static Script& script = load_script();
+    return script;
+}
+
+// The buttons the script holds on a port (0: the GamePad, 1-4: a Pro
+// Controller's channel + 1), for a read of it.
+uint32_t scripted_buttons(int port) {
+    Script& script = cafe::os::script();
     if (script.presses.empty()) return 0;
     const double t = seconds_since(script.start);
     std::lock_guard lock(script.mutex);
     auto released_reads = [&](uint32_t button) -> int& {
+        const uint64_t key = uint64_t(port) << 32 | button;
         for (auto& [b, n] : script.released) {
-            if (b == button) return n;
+            if (b == key) return n;
         }
-        script.released.push_back({button, kReleasedReads});
+        script.released.push_back({key, kReleasedReads});
         return script.released.back().second;
     };
     uint32_t buttons = 0;
     for (ScriptedPress& p : script.presses) {
-        if (p.reads >= kHeldReads) continue; // done
+        if (p.port != port || p.reads >= kHeldReads) continue; // another pad's, or done
         const double start = script.starts[p.segment];
         const bool next_reached = p.segment + 1 < script.starts.size() && script.starts[p.segment + 1] >= 0.0;
         if (p.reads < 0) {
@@ -122,7 +170,7 @@ uint32_t scripted_buttons() {
         if (p.reads >= kHeldReads) released_reads(p.button) = -1;
     }
     for (auto& [b, n] : script.released) {
-        if (!(buttons & b) && n < kReleasedReads) ++n;
+        if (b >> 32 == uint64_t(port) && !(buttons & uint32_t(b)) && n < kReleasedReads) ++n;
     }
     return buttons;
 }
@@ -192,6 +240,41 @@ uint32_t gate_select(uint32_t hold) {
 constexpr int32_t kVpadOk = 0;
 constexpr int32_t kVpadNoController = -2;
 
+GamepadState movement_state(GamepadState state) {
+    // Keep DP and LS movement consistent. Resolve opposite digital
+    // directions to neutral on that axis; digital input takes precedence
+    // over analog drift.
+    const auto digital_axis = [&](uint32_t negative, uint32_t positive, float analog) {
+        const bool neg = state.buttons & negative, pos = state.buttons & positive;
+        if (!neg && !pos) return std::clamp(analog, -1.0f, 1.0f);
+        if (neg && pos) state.buttons &= ~(negative | positive);
+        return float(pos) - float(neg);
+    };
+    state.left_x = digital_axis(vpad::kLeft, vpad::kRight, state.left_x);
+    state.left_y = digital_axis(vpad::kDown, vpad::kUp, state.left_y);
+    state.right_x = std::clamp(state.right_x, -1.0f, 1.0f);
+    state.right_y = std::clamp(state.right_y, -1.0f, 1.0f);
+
+    // Wii U reports stick directions in hold/trigger/release too. Sending
+    // only axes leaves LS-mode controllers without these digital inputs.
+    constexpr uint32_t directions = vpad::kStickLLeft | vpad::kStickLRight | vpad::kStickLUp | vpad::kStickLDown |
+                                    vpad::kStickRLeft | vpad::kStickRRight | vpad::kStickRUp | vpad::kStickRDown;
+    state.buttons &= ~directions;
+    const auto stick_axis = [&](float value, uint32_t negative, uint32_t positive) {
+        if (value <= -0.5f) state.buttons |= negative;
+        if (value >= 0.5f) state.buttons |= positive;
+    };
+    stick_axis(state.left_x, vpad::kStickLLeft, vpad::kStickLRight);
+    stick_axis(state.left_y, vpad::kStickLDown, vpad::kStickLUp);
+    stick_axis(state.right_x, vpad::kStickRLeft, vpad::kStickRRight);
+    stick_axis(state.right_y, vpad::kStickRDown, vpad::kStickRUp);
+    // Combat's sub_03F52F20 matches the D-pad masks, not the VPAD stick
+    // emulation flags. An LS-mode leverless therefore needs these bits too.
+    stick_axis(state.left_x, vpad::kLeft, vpad::kRight);
+    stick_axis(state.left_y, vpad::kDown, vpad::kUp);
+    return state;
+}
+
 struct Vec2 { be<float> x, y; };
 struct Vec3 { be<float> x, y, z; };
 struct TouchData { be<uint16_t> x, y, touched, validity; };
@@ -224,13 +307,25 @@ int32_t VPADRead(int32_t channel, VPADStatus* status, uint32_t count, be<int32_t
     }
     std::lock_guard lock(g_input_mutex);
     std::memset(status, 0, sizeof(VPADStatus));
-    const uint32_t hold = gate_select(g_gamepad.buttons | scripted_buttons());
+    GamepadState state = g_gamepad;
+    state.buttons |= scripted_buttons(0);
+    state = movement_state(state);
+    uint32_t hold = gate_select(state.buttons);
+    if (g_step_every > 1 && std::chrono::steady_clock::now() > g_step_until) g_step_every = 1;
+    g_step_delivered = g_step_every <= 1 || ++g_step_reads % g_step_every == 0;
+    if (!g_step_delivered) {
+        g_step_pressed |= hold;
+        hold = g_previous_hold;
+    } else {
+        hold |= g_step_pressed;
+        g_step_pressed = 0;
+    }
     status->hold = hold;
     status->trigger = hold & ~g_previous_hold;
     status->release = g_previous_hold & ~hold;
     g_previous_hold = hold;
-    status->left_stick = {g_gamepad.left_x, g_gamepad.left_y};
-    status->right_stick = {g_gamepad.right_x, g_gamepad.right_y};
+    status->left_stick = {state.left_x, state.left_y};
+    status->right_stick = {state.right_x, state.right_y};
     // A GamePad lying flat and still: gravity on -Z (in g), identity frame.
     status->acceleration = {0.0f, 0.0f, -1.0f};
     status->acc_magnitude = 1.0f;
@@ -272,10 +367,83 @@ uint32_t KPADSetConnectCallback(uint32_t channel, uint32_t callback) {
     g_connect_callbacks[channel] = callback;
     return previous;
 }
-int32_t KPADReadEx(int32_t, uint32_t, uint32_t, be<int32_t>* error) {
-    if (error) *error = kWpadNoController;
-    return 0;
+// KPADStatus: the Wii Remote's own part (left zero: no Wii Remote), then
+// the extension's; a Pro Controller's buttons by WPAD's bits for it.
+struct KPADStatus {
+    be<uint32_t> hold, trigger, release;
+    uint8_t remote[0x50];
+    uint8_t extension; // its kind: 0x1F a Pro Controller
+    int8_t error;
+    uint8_t pos_valid;
+    uint8_t format; // WPAD's data format: 22 a Pro Controller's
+    be<uint32_t> pro_hold, pro_trigger, pro_release;
+    Vec2 left_stick, right_stick;
+    be<int32_t> charging, wired;
+    uint8_t rest[0x6C];
+};
+static_assert(sizeof(KPADStatus) == 0xF0 && offsetof(KPADStatus, extension) == 0x5C &&
+              offsetof(KPADStatus, pro_hold) == 0x60 && offsetof(KPADStatus, left_stick) == 0x6C);
+constexpr int32_t kKpadOk = 0;
+constexpr int32_t kKpadNoController = -2;
+constexpr uint8_t kExtensionPro = 0x1F;
+constexpr uint8_t kFormatPro = 22;
+
+// The GamePad's buttons as a Pro Controller's (WPAD_PRO_*).
+uint32_t pro_buttons(uint32_t vpad_buttons) {
+    static constexpr std::pair<uint32_t, uint32_t> kBits[] = {
+        {vpad::kUp, 0x0001},     {vpad::kLeft, 0x0002},   {vpad::kZR, 0x0004},     {vpad::kX, 0x0008},
+        {vpad::kA, 0x0010},      {vpad::kY, 0x0020},      {vpad::kB, 0x0040},      {vpad::kZL, 0x0080},
+        {vpad::kR, 0x0200},      {vpad::kPlus, 0x0400},   {vpad::kHome, 0x0800},   {vpad::kMinus, 0x1000},
+        {vpad::kL, 0x2000},      {vpad::kDown, 0x4000},   {vpad::kRight, 0x8000},  {vpad::kStickR, 0x10000},
+        {vpad::kStickL, 0x20000},
+    };
+    uint32_t pro = 0;
+    for (const auto& [from, to] : kBits) {
+        if (vpad_buttons & from) pro |= to;
+    }
+    return pro;
 }
+
+int32_t KPADReadEx(int32_t channel, KPADStatus* status, uint32_t count, be<int32_t>* error) {
+    std::lock_guard lock(g_input_mutex);
+    const bool valid = channel >= 0 && channel < kProControllers;
+    const bool scripted = valid && script().pro[channel];
+    if (!valid || !(g_pro[channel] || scripted) || status == nullptr || count == 0) {
+        if (valid) g_pro_reads[channel] = {};
+        if (error) *error = kKpadNoController;
+        return 0;
+    }
+    // (Movement as on the GamePad: each player's D-pad and stick agree the same way.)
+    GamepadState pad = g_pro[channel].value_or(GamepadState{});
+    pad.buttons |= scripted_buttons(channel + 1);
+    pad = movement_state(pad);
+    ProReads& r = g_pro_reads[channel];
+    uint32_t hold = pro_buttons(pad.buttons);
+    const bool settled = r.connected >= kSettleReads;
+    if (!settled) {
+        r.latched |= hold;
+        hold = 0;
+        if (++r.connected == kSettleReads && r.latched) r.latched_reads = kHeldReads;
+    } else if (r.latched_reads > 0) {
+        hold |= r.latched;
+        if (--r.latched_reads == 0) r.latched = 0;
+    }
+    std::memset(status, 0, sizeof(KPADStatus));
+    status->extension = kExtensionPro;
+    status->format = kFormatPro;
+    status->pro_hold = hold;
+    status->pro_trigger = hold & ~r.previous;
+    status->pro_release = r.previous & ~hold;
+    r.previous = hold;
+    if (settled) {
+        status->left_stick = {pad.left_x, pad.left_y};
+        status->right_stick = {pad.right_x, pad.right_y};
+    }
+    status->wired = 1;
+    if (error) *error = kKpadOk;
+    return 1;
+}
+
 int32_t WPADProbe(int32_t, be<uint32_t>* type) {
     if (type) *type = 0xFD; // no device
     return kWpadNoController;
@@ -303,11 +471,30 @@ void set_gamepad_state(const GamepadState& state) {
     g_gamepad = state;
 }
 
+void set_pro_controller_states(const std::array<std::optional<GamepadState>, kProControllers>& states) {
+    std::lock_guard lock(g_input_mutex);
+    g_pro = states;
+}
+
 void arm_select_chord(bool partner_held) {
     std::lock_guard lock(g_input_mutex);
     g_chord.armed_until = Clock::now() + kChordArmed;
     g_chord.partner = partner_held;
     ++g_chord.armings;
+}
+
+void set_input_step(uint32_t every) {
+    std::lock_guard lock(g_input_mutex);
+    g_step_until = std::chrono::steady_clock::now() + kStepLasts;
+    if (every == g_step_every) return;
+    g_step_every = std::max(every, 1u);
+    g_step_reads = 0;
+    if (g_step_every == 1) g_step_delivered = true;
+}
+
+bool input_step_delivered() {
+    std::lock_guard lock(g_input_mutex);
+    return g_step_delivered;
 }
 
 bool take_select_chord() {

@@ -75,7 +75,8 @@ Implemented in host C++, no guest-code interpretation:
    SPIR-V at run time; tiled surfaces are detiled.
 3. **snd_core / snd_user → host audio**: AX voices mixed natively and
    played through SDL3 (see the audio section below).
-4. **vpad / padscore → SDL3 gamepad**.
+4. **vpad / padscore → SDL3 gamepads and the keyboard**: the GamePad, and
+   up to four Pro Controllers for other players (below, *Players*).
 5. **nsysnet / nlibcurl / nn_\***: offline stubs.
 
 Cemu and decaf-emu were references for the system's and the GPU's behaviour,
@@ -443,6 +444,27 @@ registered MD5 loads the current set as RGBA8 instead, and loads again when
 the controller changes (`host::on_controller_change`: the kind of the last
 gamepad pressed, SDL's PS3/PS4/PS5 and Switch types).
 
+**Controller pictures** (`title/controllers.*`, `title/pictures.*`). The
+player entry screen pictures each controller that joined: the GamePad's,
+Pro Controller's, Wii Remote's and Classic Controller's, white on its stand
+in the middle (320x220), lit red or cyan on a player's side (1P, 2P) and
+small (168x104), in pages 12 to 18 of the screen's texture sets (data007
+FB833313 and 82DCEE9A, alike but for some pages' texts). The GamePad's
+pictures show the device on the GamePad (while every device drives it,
+the one used last) and the Pro Controller's that on the first Pro
+Controller: a keyboard, a PlayStation-style or an Xbox-style controller
+(any other gamepad) drawn here, or, for a Nintendo controller, the
+title's Pro Controller. The drawings are signed distance shapes, white
+with grey lines like the title's; the lit ones are made from them as the
+title's are, measured: outside, a glow of the side's colour (FC0000,
+00D9F9) whose alpha falls from about 190 at the edge to none 14 pixels
+out; inside, a tint (FF0000, 00FFFF) mixed in 46 % at the edge and nothing
+26 pixels in. The small ones are the pictures at 0.465 of the size, the
+body's thickness showing below in a pale blue grey, on a soft black oval.
+The pages are made when a picture's device changes, drawn beside the
+title's start (some tens of milliseconds), and swapped in through
+`gpu/replacements.h` like the icons.
+
 **Fonts** (`title/font.*`). A glyph table (`NFH`) holds the font's size in
 pixels at +4 and the glyph count at +8 (little- or big-endian, by font),
 then from 0x450 a 32-byte record per glyph sorted by code point: from +4 its
@@ -540,7 +562,283 @@ frames after the pad has it), and if 3 is held by then the press is the
 chord's: the game never sees it, and the battle state takes it
 (`take_select_chord`). Otherwise the press reaches the game late, also
 when it was let go meanwhile. 3 and − in either order reset, and − alone
-still reaches the game.
+still reaches the game. The position reset also starts the frame data
+panels' totals over.
+
+## Practice: frame data
+
+In Practice a panel for each side shows its attacks' damage and properties,
+frame data, posture and distance, as Tekken 8's Practice does
+(`title/framedata.cpp`). It is read from the fighters' state after each
+fighters' frame (`sub_03ADB118`, so it stops with the pause menu), from the
+fighter each side has in play (player structs of 10592 bytes from
+`0x10884B50`). Measured with per-frame dumps of the structs in scripted
+Practice rounds (Jun against Jun: hits, a GUARD ALL dummy, the Counter
+setting on):
+
+| Field | Meaning |
+| --- | --- |
+| +0, +8 | position x, z (f32, millimetres) |
+| +96, +100 | health (s16; 180 for a solo fighter) and its recoverable ceiling (equal for a solo fighter; tag rounds not checked) |
+| +136 | the fighter's own moveset (+272: the one in use; a fighter hit plays the attacker's reactions from the attacker's moveset) |
+| +212, +280 | the move in play's frame (from 1) and its record |
+| +444, +448 | the attack in play's base damage and hit level (the attacker) |
+| +488 | the combo's damage so far as dealt, after the multipliers (the fighter hit; 0 again once it recovers) |
+| +872 | posture, low byte: 1-3 standing, 5-7 crouching, 12/13 down, 14 juggled, 25 airborne (Tekken 7's simple move states) |
+| +1152 | the frame's hit events, for that frame only: on the fighter hit 0x800000 an attack hit it, 0x20000000 it blocked, 0x80000 a counter hit (0x20000 one the Counter setting makes); on the attacker 0x200000 its attack reached. Bits 12-15 hold its reaction's state while it lasts: 6 the hit's frame, 1 after it, 7 from the frame it meets the wall (a splat; later wall hits add 0x400000), 8 the floor |
+| +522 | the move in play's last frame before the fighter can act (16 bits; a hit or block reaction's too) |
+| +1160 | bit 0x100: the fighter can act, lit from the first frame its move can be cancelled into another or the first frame back in its neutral move |
+| +1180 | the last hit's base damage (the fighter hit) |
+| +2704 | bit 0x10000, on the frame it was hit: a punish (hit during its own attack's recovery) |
+
+A move record (0x70 bytes) has its hit level at +0x10 (the second byte: 1
+low, 2 mid, 4 special low (crouching jabs), 5 high; 7, 8 and 11 only on
+item moves) and its first and last active frames at +0x64 and +0x68
+(Jun's jab: 10, as Tekken's frame data gives its startup). Frame advantage
+is the difference of the frames each fighter needs until it can act again:
+Jun's jab +8 on hit and +1 on block, as in Tekken's frame data, d+3 −3 on
+hit and −14 on block. It shows on the frame the hit or block lands, from
+both moves' +522 (the attacker's attack, the defender's reaction), and is
+checked by counting until both can act (+1160), which corrects it where the
+defender goes on through other moves (a knockdown: +27 on the hit, +53 once
+Jun's f+4 victim is up); the two agreed on every other hit measured. The damage multiplier shown is the one the
+title's own DAMAGE display shows (120% for a solo fighter, 144% for a solo
+fighter's counter hit, else the dealt damage over the base). The Counter,
+Punish and Wall badges light from those markers, the ones the title's HIT
+INFO shows COUNTER, PUNISH and WALL HIT from (checked against a player's
+counter hits, punishes and wall hits with Reina against Jinpachi), and stay
+lit for the combo, as those texts do; Wall lights on the frame the state
+turns 7 during a combo, so a first splat counts as well as later wall hits.
+No marker for CLEAN was found, so that badge stays dim. The
+practice settings object (`0x108D1C60`) holds Action 1 at +4 (4: GUARD
+ALL), the HUD Information rows at +48 to +76 (COMMAND HISTORY, HEALTH GAUGE,
+DAMAGE INFO 1 and 2, COMBO INFO, HIT INFO, ATTACK PROPERTIES, HIT ANALYSIS;
+1 = on) and Counter at +80; the panels stand above the hint line along the
+bottom, where DAMAGE INFO 2's bars also go.
+
+COMMAND HISTORY is on to begin with: the practice settings' defaults
+(`sub_04F1F270`, r3 the settings: as the game starts, for the pause menu's
+DEFAULT) set it on, and as a Practice round starts (`sub_04F2544C`, after
+the saved settings were copied in) the port sets it on again, its pause
+menu value too (the menu fills its values from the saved settings before
+the round starts and reads them back as it closes). It can be turned off
+for the session. Its row in HUD Information has the default cursor and
+entry texts of a row whose default is on (HEALTH GAUGE's), so ON is green.
+COMMAND HISTORY shows an input history after Tekken 8's in place of the
+title's bar along the bottom. The title turns its bar on with
+`sub_04F1EDAC` (r3 the practice HUD at `0x108D1D50`, r4 1: bit 0 of its
++4 set, then the bar started by `sub_04F1BB34`), from the settings word as
+a round starts (`sub_04F2544C`) and from the pause menu's value as it
+closes; the port makes it never turn on, and the word, which the pause menu
+shows and sets as before, turns on the port's history instead. The
+player's fighter (the side the GamePad drives: +2052, its raw buttons) has
+its buttons at +2032 (1 to 4 held: 0x200 to 0x1000; pressed this frame: 1
+to 8) and its direction at +2036 (bit n for numpad direction n, forward
+being 6 as it faces); each fighters' frame either adds a frame to the
+newest row or starts a row, and the overlay draws the last 27 in a column
+along the left edge, from under the 1P name tag, with the main font's icons: the bold arrows at `0xE008` to
+`0xE00F` (numpad order, 5 skipped; `0xE000` on the thin ones) and the
+Tekken button pictures at `0xE014` + the buttons held (1 in bit 0 to 4 in
+bit 3).
+
+ADV. COLORS colours the fighters by frame advantage, as Tekken 8 does: from
+a hit or block until both can act again, the fighter ahead blue, the one
+behind red (by the advantage the moves give until one of them can act,
+then by which one can). The title draws a fighter in a colour it multiplies
+the fighter's with (four floats: red, green, blue, alpha; white leaves it
+as it is, alpha below one fades the hair), which it gets from
+`sub_04E1A0FC` (r3 the fighter): the fighter's own at +7840, or, with HIT
+ANALYSIS on, a blue one (0.2, 0.4, 0.8 at `0x1030CD70`) while the fighter's
++1161 byte is 0. The port returns one of its own two instead for the
+fighters it colours (1.7, 0.2, 0.2 and 0.25, 0.4, 1.8), until a quarter of a
+second after the last fighters' frame, so not once Practice is left.
+
+The position reset has a hint of its own at the bottom right, on the
+line where the title puts its hints (Defensive Training's "Select +
+button: Start", at the left: 23 pixels high at y 643 to 666 of the TV
+image): Select's icon and 3's button picture from the main font's texture
+with the port's icons for the controller in use (neutral or PlayStation,
+`font::neutral_icons`/`playstation_icons`), "+" and "Reset Position" in
+the label font outlined as the title outlines its hints. The panels and
+the top view stand above that line (their bottom at y 634, whether DAMAGE
+INFO 2's bars are on or not; those bars share the line). The title's own
+hints stay where its HUD movie puts them: their place is in that movie's
+data, not found (its text is kept as glyphs, not as a string).
+
+The panels are pictures over the title's image (`gpu/overlay.h`): quads in
+the TV image's 1280 × 720 coordinates from one RGBA atlas, which the
+renderer draws over each presentation image (`gpu/vulkan/overlay.cpp`, an
+instanced draw blended right after the TV scan buffer is copied in), so
+extra frames have them too and nothing reaches guest memory; TTT2_CAPTURE's
+TV captures are saved again with them. They last a quarter of a second
+unless shown again, so they go when the fighters' frames stop. The atlas
+holds the panel, the title's own: the main menu's player box (data007's
+menu textures, an NTP3 of 800 x 116 in BC3, drawn by the title as light
+over the scene, black round it), cut into a nine-slice whose edges keep
+their size (the top left corner's cut and inner step, the bottom right's
+notch) and whose middles come from a plain stretch of rim. What the
+texture's edges reach without crossing the rim's line (brighter than 60;
+the glow round it is as bright as the glass inside) is outside, the notch
+closed where its glass ends (it meets black there); the outside's glow
+becomes light (its brightness the cover, its colour at full strength), the
+inside dark glass at 72% and the rim opaque, all at four texels a pixel,
+filtered, so the outline cuts smoothly on larger screens. 2P's has its
+colours turned to their opposites (the teal rim red). Without the texture
+a box drawn in its likeness stands in. The panels sit in
+from the screen's sides under the fighters, and the ASCII glyphs of the title's Japanese gothic font (labels)
+and main bold italic font (values), neither of which has a space glyph.
+
+The pause menu's ULTIMATE SETTINGS row takes the place of TOUCH SELECT, which
+opens the GamePad's Easy Input screen. The pause menu is a Lumen movie
+whose script calls native functions by name (registered by `sub_04F26xxx`
+for Practice's own, `sub_085Bxxxx` for the menus'). Choosing a row it
+switches frames (`MenuDelaySwitchFrame`, `sub_085A7C38`, the frame's name
+at r4: `FramePracticeEasyInput` for TOUCH SELECT); entering one it puts the
+focus on a row (`MenuContainerSetFocusName`, `sub_085AA2D8`: r3 the row,
+r4 the menu); rows show and hide by `MenuSetVisible` and
+`MenuSetFocusable` (r3 0/1, r4 the entity's name). ULTIMATE SETTINGS is HUD
+Information's frame (`FramePracticeMenu01-09-04`, reached through ADVANCED
+SETTINGS) borrowed: TOUCH SELECT's switch goes there instead, and while it
+is ULTIMATE SETTINGS its header, first six rows' labels and descriptions
+(practice texts 1039, 669, 670, 674 to 677, 824 to 841) say its own, its
+other two rows are hidden, and its rows' values are its settings.
+(ADVANCED SETTINGS itself has no spare row: its frame holds its five.)
+Those values are
+select values (`SelectValuePracticeMenu01-09-04-NN`, names at `0x1031C9C8`
+on, 0x24 apart; cursor 0 ON, 1 OFF) that the title fills from the practice
+settings' HUD words as the pause menu opens (`MenuSelectValueSetCursor`
+through `sub_04F9FB6C`) and reads back (`sub_04F9FB8C`): the port sets
+them as the frame comes and again once its focus is set (the title may
+refill them from the HUD words in between), reads them every battle frame
+while it is up (a pause menu closed from it is gone before the port could
+read them after) and gives HUD Information its own back. A value is drawn
+green at its row's default and yellow otherwise by its entries' styles
+(entries of 40 bytes from the pointer at +348, the style at +36; +368 the
+default cursor): a row whose default differs from its HUD Information
+row's (COMMAND HISTORY's is OFF, the panels' on; COMBO INFO's and HIT
+INFO's ON, HITBOXES' and TOP CAMERA's off) takes the styles and default of
+a row whose default is the one it needs, and gets its own back when HUD
+Information next shows. The title's practice code reads the menu's values
+back through `sub_04F9FB8C` as the pause menu closes (and applies the HUD's
+parts from them); while the rows are ULTIMATE SETTINGS', it gets HUD
+Information's own values, as they were when the submenu opened, so a pause
+menu closed from the submenu does not turn on DAMAGE INFO 2's bars with
+ADV. COLORS, nor turn off COMBO INFO and HIT INFO with HITBOXES and TOP
+CAMERA (the menu's script shows the values through its own native). Its back, to ADVANCED SETTINGS' frame, goes to
+the pause menu's own instead, with the focus on the ULTIMATE SETTINGS row
+(`MenuItemPracticeMenu01-13`); entered as HUD Information again, its rows
+show again. Texts are rewritten in the loaded banks in guest memory (found
+once by a scan of MEM2 near the menu and practice banks' keys, ~105 ms at
+the start of a Practice round) while needed, and put back after: the row's
+description (menu text Manu_1669, which other menus may show) while
+Practice runs, the submenu's while it is open; a text can only take the
+space of the one it replaces. The row's label, longer than TOUCH SELECT's
+space, is set on the row itself whenever the pause menu's frame comes up
+(`MenuEntitySetText`, `sub_085A9978`: r3 the text, plain ASCII, r4 the
+entity's name); the pause menu's labels come from the movie's own data,
+not through the script (`MenuEntitySetTextID` is not called).
+
+HITBOXES draws where the title tests attacks against bodies. Each fighter
+has 14 spheres on its bones (+2168, 24 bytes each: the centre, the radius
+at +12 and again at +20, its square at +16), placed every frame from its
+bone matrices (`sub_03C74F50`, bones from the table at `0x101F51A4`),
+large (a hip's 440 mm). An attack tests line segments, at +2072 (24 bytes
+each: two ends; at most four, their number in the byte at +1158 on the
+frames they are tested), against the other fighter's spheres
+(`sub_039C0948` → `sub_039C0508`, each line against each sphere by
+`sub_039C006C`: hit when the line passes within the radius; the extra
+radius `sub_039C0460` adds is 0 for fighters of equal size). The move's
+hitbox bones (its record's +0x60, four bytes) give the lines: a point at a
+fist or a foot, a forearm or a shin from a bone to the next. The eight
+spheres at +2504 (16 bytes: centre, radius, scaled by +1652) are the
+fighters' push spheres, not drawn. The port draws the spheres as 3D solids
+in the fighter's side's colour (red where a line crossed them, for a third
+of a second), the lines as thin capsules in front of everything, fading,
+through the camera that renders the scene: the camera manager
+(`*(*0x1084FEBC + 732)`) keeps it at +392, a camera holding its eye,
+target and up at +0x10, +0x20, +0x30, near and far at +0x48 and +0x44,
+aspect at +0x50, its projection at +0xA0, view at +0xE0 (row vectors, the
+view looking down its −z; the default Practice camera has none of its
+rotation) and the two multiplied at +0x60. The overlay (`gpu/overlay.h`)
+takes the solids with that matrix: the renderer casts each pixel's ray
+through its inverse and finds the capsules' surfaces exactly, shading them
+by their normals (lit from the camera, brighter at the edge, rings at even
+heights and angles), the bodies' nearest surfaces only (their depths in a
+first pass, then their colours where those are nearest, blended once),
+the lines last, without depths.
+
+SLOW MOTION (OFF, 1/2, 1/4) holds the battle's frame (`sub_0726DF8C`,
+which runs the fighters, their pushing and knockback, the camera, effects
+and the HUD) on all but every second or fourth frame while the fighters
+are in play, the title showing the same scene in between, as Smash Bros.'
+training mode steps its frames. Holding only the fighters' frame
+(`sub_03ADB118`) made them wiggle: the rest of the battle frame went on
+moving them (pushing apart, knockback) at full speed. The pad steps with
+it (`os::set_input_step`): VPADRead shows a change on every second or
+fourth read only, with every button pressed since (one pressed and let go
+in between as held for that read), and the frames that run are those after
+such a read, so no press is lost (Start opens the pause menu at 1/4; on a
+held frame it went unseen). The stepping lasts a quarter of a second
+unless set again each battle frame, so the pad goes back to usual when the
+battle's frames stop; the pause menu, run from the battle's frame too,
+keeps its speed, as frames are held only after one whose fighters ran.
+Its row (ATTACK PROPERTIES') has three values where that row has two: its
+select value's entries (a vector at +348/+352/+356, 40 bytes each) are the
+port's three while the row is ULTIMATE SETTINGS', the row's own put back
+before its looks (the title frees them). An entry's text is the menu's
+text kind and id at +32 and +36 (the value as drawn, with its arrows and
+its colour in the text's control codes: U+FFF2 and two code units, FF20
+FF20 green at the row's default, FF20 FFFF yellow otherwise; read through
+`sub_045590E0`), or, with both 0, its own string (inline at +4 up to 15
+bytes, else at the pointer at +20, its length at +24, room at +28): OFF is
+the row's own green OFF, 1/2 and 1/4 its yellow ON's text with the word
+changed. (What the port called the entries' styles are these text ids.)
+
+TOP CAMERA shows the fight from straight above in a window between the
+panels while the main camera stays as it is: over the fighters' middle,
+their line across the window with 1P's end on the left (up, the way away
+from the default camera), high enough for both with a metre round them,
+with the render camera's own projection; it eases there (a sixth of the
+way a frame following the fighters, a tenth rising or sinking as they part
+or close in), placed at once when the window comes up. The title draws its frame once;
+the renderer draws it again (`gpu/overlay.h`'s window, `Renderer::
+view_constants`): the frame interpolation's log of the frame is replayed
+once more after its extra frames (`begin_replay(0)`), every draw reading
+its recorded constants, in which the camera's view-projection matrix (as
+the camera holds it, or transposed, in the block's byte order, within the
+first 4 KiB of a block: a few blocks a frame) is replaced by the one from
+above; the TV image that replay ends in is kept, and the overlay shows its
+middle half in the window, the solids drawn over it through the matching
+matrix. The renderer looks for the cameras of the last few frames the
+port showed, as the frame it replays may be one or two behind. Logging
+the frames and recording their constants, which interpolation does
+anyway, run while the window is on at 60 frames a second too
+(`Backend::logs_frames`, asked at each swap). Carried targets get the
+frame's start back for the replay and its end after, as for the extra
+frames, and every other target the frame wrote is copied aside before the
+replay and put back after it: later frames may read one without writing
+it first (the pause menu keeps the picture of the scene it opened over,
+and showed it from above). A replay in which the camera was not found
+(a frame rendered from the pause menu's camera, as it closes) keeps the
+window's last picture. Only frames that showed a new window are replayed
+(`overlay::window_generation`): not a held slow-motion frame, nor the
+pause menu's first frame, which takes its picture of the scene (replaying
+it on Fallen Garden left a 256 x 256 corner of the stage's work target, in
+its purple, in that picture). The title culls its scene for its own camera, so
+what that camera could not see is missing from above (the floor is
+whole); 2D effects the CPU places on the screen stay where they are on it.
+(Writing the matrix into the render camera itself at the end of each
+battle frame, `sub_0726DF8C`, turned the main camera instead; the title
+then culled for it too.)
+
+Easy Input crashed with an added fighter: it keeps each fighter's four
+GamePad move slots in a table of 59 (`0x108638F8`, read through
+`sub_02774188`, written through `sub_027741EC`), and both stop the title
+(a store to address 0) on a larger select id; its state machine
+(`sub_0239AA84`) loads them (`sub_0239CBD4`) once the screen asks (bit 0x2
+of `0x108516EC`). Practice no longer opens it, and wherever else it opens,
+added fighters get empty slots of their own (not saved), so it loads for
+them too.
 
 ## Input delay
 
@@ -604,11 +902,26 @@ keys of its body files and part packs by type) and chara master
 cells the cursor moves to, column and row) has 62 cells; it grows over the
 following, unused grid of the PlayStation 3's smaller roster. The added
 cells sit at the free ends of the top row (columns 0-2 and 19-22), then in
-new columns beyond the rows' ends (-1 and 23, then -2 and 24): the cursor's
-place on the screen is computed from the column (`sub_06F4D7B8`: 48 pixels
-a column, signed), and the importer puts each cell's picture in the grid's
-layouts at its column. Every row is a ring left and right and every column
-a ring up and down, in column and row order, as the title's own cells are
+new columns beyond the rows' ends (-1 and 23, then -2 and 24), then in
+a new top row (row -1, from the '?' column outwards; `kRowCells`), which
+the grid has only while a fighter's place is past those 19 cells: the
+cursor's place on the screen is computed from the column and row
+(`sub_06F4D7B8`: 48 pixels a column, 65 a row, both signed; nothing else
+reads them), and the importer puts each cell's picture in the grid's
+layouts at its column and row: a copy of a row-1 panel, whose card sits
+6 units above its place where a top-row panel's sits on it (so a cell in
+the top row is placed that much lower), drawn after the panels of its
+row and the rows above (each row's panels cover the bottom of the row
+above them). For the new row the importer moves the
+title's three rows (and the band under them) down a row into the space
+under the grid, stretches the '?' panel over four rows and drops the
+"CHOOSE YOUR CHARACTER" banner (`art.four_rows`; the new row's empty cells
+show the background); `shared/grid.ini` (`grid = rows`) tells the port,
+which then moves the '?' cell up, the cursor's row 1 down 65
+(`0x10531388`) and the button guide (one object every menu shares, placed
+by `sub_04DC6A48`) down 40 while the grid is on screen. Every row is a
+ring left and right and every column a ring up and down, in column and
+row order, as the title's own cells are
 (rebuilt from the cells' columns and rows, this reproduces the title's
 links exactly). A slot with no fighter has a random cell nothing moves to;
 the grilles over the top row's ends are hidden where a cell sits.
@@ -744,7 +1057,8 @@ added fighter is noted as its donor.
 (`character.ini`'s `outfits = <code> ...`, each code's `.nud .nut .bon .xml
 .mop`, one picture each in `art/costumes.nut`): the importer makes one from
 each of Tekken 7's preset sets for the fighter (a definition's `PRESETS`,
-`convert/outfits.py`); the preset of the fighter's own costume is its own body,
+`convert/outfits.py`), for the fighters `--outfits` names (the launchers'
+Outfits boxes; all by default); the preset of the fighter's own costume is its own body,
 the only one with 2P colour layers (palette entries go by select id, which
 outfits share). The chooser then lists the donor's costume 1 once per outfit
 and the pick (`sub_033E265C`) chooses the body; 14 entries is the chooser's
@@ -998,6 +1312,109 @@ to both costumes and placed in grid cells no other fighter uses (the pack
 carries the colour grid and both palettes). The pack holds Namco's assets:
 the importer refuses to write it inside this repository, and `.gitignore`
 keeps the games' file types out.
+
+Tekken 7's 2D fighters' gauges (Akuma's, Eliza's, Geese's; `GAUGE` in a definition,
+`convert/gauge.py`, `title/gauge.cpp`): Tekken 7 keeps the gauge in its
+executable, the moveset only tests it (requirement 629: at least `param`,
+635: less) and changes it (0x81c2 adds its value: EX moves -500, supers
+-1000), with 0x8228 (the move's attacks build none) and 0x8229 (the fighter
+lights up). The converted moveset keeps them on the port's own ids:
+requirements 190 and 191 (no TTT2 moveset uses them and sub_0404FF30 takes
+them as false; ids above 642 would not do, as the cancel rows' loader
+sub_040D2300 marks rows testing them as special ones, never tested for a
+player) and properties 0x8220, 0x8222 and 0x8223 (TTT2's interpreter
+passes over them). The runtime does what Tekken 7's executable does around
+them: after each fighters' frame a fighter that lost health gains that
+times 112% / 150% (Akuma's / anyone else's), its opponent 225% / 300%, of a
+blocked attack's damage 37% / 50% and 75% / 100%; the gauge empties at a
+match's start and carries over between rounds (the title's situation
+set-up `sub_039C2DB0` keeps it for its round end, 26, its next round, 4
+and 6, and a match won, 7; a match's first round, 1 and 3, Practice's 12
+and 15 and the fighters' load, 23, empty it). As it reaches its most from
+below, Akuma's and Eliza's play Tekken 7's `SE_battle_spgauge_full` (its
+gauge-full event's listener plays that common sound for them; no move
+does): the importer appends it as one more item sound and writes its
+number as the gauge line's seventh field, and the runtime plays it through
+the title's item sound player `sub_077537D0`. The flash multiplies the
+fighter's colour (sub_04E1A0FC) by yellow for a moment. The HUD is Tekken
+7's, from its HUD movie (a Scaleform SWF, `tekken7/swf.py`): the importer
+plays each clip's timeline and writes every frame's placed pictures into
+the pack's `gauge/` (gauge.ini over gauge.nut), and the runtime shows the
+clips Tekken 7's HUD code would for the gauge (a stock fills, every stock
+full, the gauge spent) on the overlay's HUD layer, the slots' bars moved
+along their masks, while the fighters' round phase (player +2048) is past
+its intro. Each side's panel ends where its own life bar's frame ends
+(the title's HUD size option, 0x107C9908, moves both) and rests a little
+above the title's texts at the screen's bottom (Survival's `WINS: n`), in
+Practice above the frame data panels' line; those panels go above it (its
+box: where its resting pictures' texels cover at least half). The pictures shown only in the glow and lightning clips (Eliza's
+bats and flares) are kept at half size, the sheet as BC3.
+Geese's gauge holds three stocks and has Tekken 7's MAX mode: 1+2+3 spends
+a stock and starts a timer (player +0xcd8: at most 720 frames, one less a
+frame; requirement 176 tests it running, 0x82a9 adds to it) that his EX
+moves need and shorten, his supers end, and while it runs he builds no
+gauge; the port's ids are requirement 192 and property 0x8224. His HUD is
+his own movie's (SW_UI_HUD_Rage_MRY, played as Tekken 7's SwfHUDMRYGauge
+does): a power bar for the stock being filled with the stock count beside
+it (the count's clip baked once per number), MAXIMUM when every stock is
+full, the MAX timer's bar with MAXMODE while it runs; he is drawn in a
+pulsing light blue (his colour multiplied, as the flash) until it ends.
+A super stops time for the opponent as it starts (Tekken 7's 0x828c, slow
+motion: its value's low 16 bits the frames, with 0x828d, its fighter
+immune; Double Reppuken 70 frames from its 8th, its hit at the 80th): the
+importer writes it as property 0x8225, and the runtime skips the
+opponent's own frame (`sub_0414FA10`, r3 the fighter: its move, animation
+and inputs) and puts it back where it stopped after each battle frame (the
+pushing and knockback run outside it), until the frames are over or a
+fighter is hit. TTT2 has no hit stop to borrow (the move frames run on
+through a hit), and without the stop the opponent recovered long before
+the super's hit (1,2,1,2 into Double Reppuken no combo). Tekken 7 shows the
+attacker meanwhile through camera animations of the fighter's own (0x8439
+/ 0x843a); the port writes a close-up of its own into the render camera
+after each battle frame (eye, target, up, view and view-projection: the
+title draws from them), from the side the camera was on, turning and
+closing in, and lets the title's camera take over when the stop ends.
+A Tekken 7 projectile hits a fighter once: Raging Storm's, allowed 10
+hits, deals its 43 once, while TTT2's deals its hits on every frame it
+touches the opponent (six of them, 140 and more). A projectile that hits
+more turns into the next on its hit (a cancel row testing 784, the
+projectile hit, with option 0x40; 787 blocked): Double Reppuken's and
+Messatsu Gou Hadou's five of 13 and 20. TTT2's projectiles have such
+cancel lists but no test for their own hit, so a 2D fighter's projectile
+gets the chain's length as its hits (they come on consecutive frames).
+
+The 2D fighters' sound effects (`convert/sounds.py`): Tekken 7 plays a move's
+sound with 0x84c4 / 0x84c6 = bank << 24 | n, bank 15 being the common sound
+manager's list (`BP_TekkenCommonSoundManager` BattleSysTones: 57
+`mrx_hadou01_shot`, 71 `SE_battle_spgauge_start` an EX move's start, 72
+`SE_battle_spcombo_start` a super's, 404 `se_mry_rep_shot`, ...), whose
+events are in AkBankBattle.bnk or the fighter's own voice bank (Geese's);
+a projectile's hit sound is its missile blueprint's (the AkAudioEvent it
+names ending `_hit` / `_hit_flame`). The importer appends those the kept
+moves use to the fighter's se_Chr (copies of the donor's item sound tone,
+`itm_lar_03`; character.ini `sound_extra`), and the moves play them as item
+sounds: 0x82f9 = 12 << 24 | 1 << 12 | n (kind 1: the player's own list,
+which the runtime makes the donor's item sounds and then these), as does a
+projectile row's hit sound (field 16). They play alongside the voice.
+A projectile's look turns to the way the projectile flies (its place from
+frame to frame; Tekken 7 turns its missile so), and before the projectile
+has moved, to the way its row gives (its forward and up speeds): the
+effect library gives a particle the emitter's frame when it spawns, and
+the look's bodies (Akuma's egg, rings and swirls) spawn on its first frame,
+so the air fireball's flew level along its path. An effect that starts with
+a projectile thrown up or down (within 150 ms of it: the air fireball's
+flash, which Tekken 7 sets on the throwing hand) turns whole about its
+fighter's left to the projectile's path (atan2 of the row's up and forward
+speeds, -52 degrees for Akuma's): left level, its orbs and wind went
+straight up or straight back. Such a projectile ends where it meets the
+floor (its frames left set to 1 once its lowest point is at the floor's
+height, as Tekken 7's missiles end there; TTT2's flew on through it). An air
+move hangs at its height until it has thrown its projectile, then falls on
+(Tekken 7's air fireball: thrown right after the take-off it comes out just
+above the floor). Falling through its startup, one started late in the jump
+landed well before its throw, which then never came (the touchdown goes to
+the move's ground_fall frame) or came from the floor a sixth of a second
+later.
 
 ## The launcher
 
@@ -1262,6 +1679,41 @@ layout (GTK 4.18's, else that of the last key pressed that every layout
 defines). Saving writes through a link to where it leads, keeping that
 file's mode.
 
+**Players** (`host/window.cpp`, `os/input.cpp`, `title/controllers.cpp`).
+The title takes one player's input from the controller that pressed + on
+its title screen (a Pro Controller cannot move the menus the GamePad
+opened), so the keyboard and every gamepad drive the GamePad, as one
+player's, everywhere but in the modes for several players. Those (VS
+Battle, Team Battle, Pair Play) begin on a player entry screen ("Press the
+controller's +"), which the title builds for the Wii U's GamePad, Pro
+Controllers and Wii Remotes. There the first device to press + takes the
+GamePad and every other one that presses + the next Pro Controller, and
+each player drives only their own; devices that have not pressed + drive
+the GamePad until it is taken. The title offers VS Battle and Pair Play
+only while a controller other than the GamePad is connected, so each
+device beyond the first (the keyboard counts) keeps a Pro Controller
+connected, idle until a device takes it. Every offline mode loads the screen's
+layouts (data007 794FFCD9 and FA2AD1D0) as it starts, which begins a
+session; the mode manager (`*(*(*0x10872CB8 + 228) + 228)`, its kind at
++444) tells the rest. VS Battle shows the screen inside its mode (kind 9);
+Team Battle and Pair Play show it with no mode, and start theirs (14, and
+0 as Arcade) once the players have joined; the other modes start at once
+(Arcade 0, Practice 4 and 5, Survival 10, Time Attack 11, Ghost Battle 12)
+with no one joined, which ends the session. When the menus are back (kind
+6) every device drives the GamePad again and the Pro Controllers
+disconnect. A press of + by a second device within 100 ms of one that took
+a controller takes none (a controller that shows as two devices, as beside
+Steam's virtual gamepad). The title reads
+the Pro Controllers with `KPADReadEx` (`KPADStatus`, 0xF0 bytes: the
+extension's kind at 0x5C, 0x1F for a Pro Controller, which it counts as
+device kind 14; WPAD's data format at 0x5F, 22; the buttons by WPAD's
+Pro Controller bits from 0x60, the sticks from 0x6C); a Pro Controller just
+connected shows no buttons for three reads, so that the title has seen it
+connect before the + that connected it (held for four reads after). Its
+WPAD calls (`WPADRead`, `WPADProbe`) belong to an older library of the
+title's (core Wii Remote, Nunchuk and Classic Controller only) that
+nothing runs.
+
 How the game starts comes from `$XDG_CONFIG_HOME/ttt2/display.ini` (the
 same folder rule), read once by `open_window` before the window is made
 (`runtime/src/host/display_settings.cpp`, without SDL: the launcher builds
@@ -1349,7 +1801,7 @@ ignores. Renderer debugging:
 | `TTT2_CAPTURE=<dir>` | TV/GamePad images as PNG every `TTT2_CAPTURE_INTERVAL` seconds (default 5) |
 | `TTT2_CAPTURE_SEQUENCE=<n>` | with `TTT2_CAPTURE`, also every image shown for the next n frames after each capture, in order (`seq_<capture>_<frame>_<n>.png`, the real image last) |
 | `TTT2_TRACE_AT=<s>`, `TTT2_TRACE_FRAME=<n>` | log every command of one frame; with `TTT2_CAPTURE`, save all its render targets |
-| `TTT2_INPUT_SCRIPT="25:plus,26.5:a"` | press GamePad buttons at given seconds, for unattended runs (`@<hash>` items wait for an archive entry) |
+| `TTT2_INPUT_SCRIPT="25:plus,26.5:a"` | press GamePad buttons at given seconds, for unattended runs (`@<hash>` items wait for an archive entry; `30:plus#2` presses on Pro Controller 1, `#3`-`#5` the others, connected for the run) |
 | `TTT2_TRACE_ENTRIES=1` | every archive entry the title reads, with times |
 | `TTT2_TRACE_ROSTER=1` | the added fighter's entries |
 | `TTT2_DUMP_SHADERS=<dir>` | shader binaries, draw registers and generated GLSL |
@@ -1376,6 +1828,8 @@ ignores. Renderer debugging:
 | `TTT2_TRACE_PRACTICE=1` | each position reset in Practice |
 | `TTT2_TRACE_INPUT_DELAY=1` | each input delay the fighters' queues get (a mode's start, Practice's Input Delay) |
 | `TTT2_CONTROLLER=playstation/nintendo/xbox` | icons and menu buttons for this kind of controller |
+| `TTT2_DEVICES=keyboard,playstation,...` | the devices the controller pictures show, for the GamePad and Pro Controllers 1-4 (`keyboard`, `playstation`, `xbox`, `nintendo`) |
+| `TTT2_TRACE_PLAYERS=1` | modes for several players starting and ending, and each device taking a controller |
 
 The launcher (`launcher/app`, `ttt2-launcher`) runs by itself for tests,
 through the same code as its buttons (only the file pickers and the

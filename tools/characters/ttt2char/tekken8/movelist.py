@@ -232,7 +232,7 @@ def command_presses(command):
 
 
 # ---------------------------------------------------------------------------------------------------- converting
-def convert(mvl, store, log=print, texts_by_language=None, bounds=None):
+def convert(mvl, store, log=print, texts_by_language=None, bounds=None, bound_entries=None):
     """The TTT2 command list (MVLT bytes) of a Tekken 8 command list `mvl` (its saved bytes), its texts read from
     the store (or given: {language: {key: text}}); None when there is none to make. bounds: the definition's bound
     moves for the bound icons (bound_hit; move_overrides.command_bounds), None: no icons."""
@@ -295,6 +295,9 @@ def convert(mvl, store, log=print, texts_by_language=None, bounds=None):
         hit = 0
         if bounds is not None and own and x['kind'] == KIND_MOVE:
             hit = bound_hit(bounds, demo_presses(rows[0]), command_presses(tables[ENGLISH].get(x['keys'][1])))
+        if bound_entries and x['keys'][0] in bound_entries and x['kind'] == KIND_MOVE:
+            entry_hit, enabled = bound_entries[x['keys'][0]]
+            hit = entry_hit if enabled else 0
         out.append(dict(strings=strings, demo=first, count=len(own), kind=x['kind'], demo_kind=x['demo_kind'],
                         icons=(0, hit << 8)))
     kept, dropped['empty title lines'] = drop_empty_titles(out)

@@ -4,7 +4,7 @@
 
 #include "rpx.h"
 
-#include <openssl/evp.h>
+#include "host/digest.h"
 
 #include <cstring>
 #include <string>
@@ -13,12 +13,10 @@
 namespace cafe {
 
 std::string sha256_hex(const std::vector<uint8_t>& data) {
-    unsigned char digest[32];
-    unsigned int length = 0;
-    EVP_Digest(data.data(), data.size(), digest, &length, EVP_sha256(), nullptr);
+    const auto digest = host::digest<32>(data);
     std::string hex;
     char byte[3];
-    for (unsigned int i = 0; i < length; ++i) {
+    for (unsigned int i = 0; i < digest.size(); ++i) {
         std::snprintf(byte, sizeof byte, "%02x", digest[i]);
         hex += byte;
     }

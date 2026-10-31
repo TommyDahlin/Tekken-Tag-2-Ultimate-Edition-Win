@@ -6,9 +6,11 @@ and which TTT2 bone each Tekken 7 bone's skin weights go to.
 * Joint positions move to the Tekken 7 fighter's: animated joints, assists and fingers are anchored to the Tekken 7
   joint with the same role (ANCHOR); limb helpers keep their place along their limb segment (fraction t and a
   sideways offset); everything else moves with its parent.
-* Face joints keep the donor's offsets to the head: the face animations set absolute local positions made for the
-  donor's face, so a face joint moved to the new face would be pulled back by every face animation (the lips pushed
-  into the face).
+* Face joints sit at the Tekken 7 fighter's own (skeleton.FACE: Tekken 7's face rigs have the same 31), so blinks,
+  glances and the jaw turn about the fighter's own eyelids, eyes and jaw. The face animations set absolute local
+  positions made for the donor's face: convert/face.py moves the fighter's by the same offsets (without that, every
+  face animation pulled the joints back to the donor's places: the lips pushed into the face). A source without a
+  face joint by that name (Tekken 8's face rig: '<role>@<its name>') keeps the donor's offset to the head.
 * Scale = the Tekken 7 BASE joint's height / 1150 (TTT2 puts HARA_ROT1 at 1150 x scale); body bone scales follow it,
   hand and face scales stay the donor's.
 * Since build keeps the donor's rest rotations, the model must be bound in the donor's pose (TTT2 skeletons and
@@ -37,8 +39,8 @@ FACE = ['L_Mayu1_Joint', 'L_Mayu2_Joint', 'L_Mayu3_Joint', 'R_Mayu1_Joint', 'R_M
         'R_LipD_Joint', 'M_LipU_Joint', 'M_LipD_Joint', 'Jaw_Joint', 'Bero1_Joint', 'Bero2_Joint', 'L_Hana_Joint',
         'L_Hoho_Joint', 'L_Chobo_Joint', 'L_Kobana_Joint', 'R_Hana_Joint', 'R_Hoho_Joint', 'R_Chobo_Joint',
         'R_Kobana_Joint']
-# joints that keep the donor's offset to another (already placed) bone instead of an anchor; the face joints keep
-# theirs to the head (face animations are made for the donor's face)
+# joints that keep the donor's offset to another (already placed) bone instead of an anchor; the face joints the
+# source has no joint of keep theirs to the head
 KEEP_OFFSET_TO = {'KUBI_jnt': 'KUBI_jnt_assist', 'ATAMA_jnt': 'ATAMA_jnt_assist'}
 KEEP_OFFSET_TO.update({f: 'ATAMA_Joint' for f in FACE})
 # limb segments (TTT2 names) for helpers
@@ -161,10 +163,15 @@ def build(t7bones, donor):
         a = ANCHOR.get(nm)
         if a is not None and a in t7pos:
             newP[i] = t7pos[a].copy()
+    # the face joints at the fighter's own (convert/face.py moves its face animations with them)
+    for nm in FACE:
+        if nm in t7pos:
+            newP[idx[nm]] = t7pos[nm].copy()
     # 2. the donor's offsets to an anchored bone
     for nm, ref in KEEP_OFFSET_TO.items():
         i, r = idx[nm], idx[ref]
-        newP[i] = newP[r] + (P[i] - P[r])
+        if i not in newP:
+            newP[i] = newP[r] + (P[i] - P[r])
     # 3. limb helpers along their segment, 4. the rest with their parent (in index order: parents first)
     seg = [(idx[a], idx[b]) for a, b in SEGMENTS]
     for i in range(n):

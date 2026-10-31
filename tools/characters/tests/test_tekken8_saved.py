@@ -318,9 +318,9 @@ class OnlyTekken8(unittest.TestCase):
     def add(self, folder, fighters):
         runs = []
         args = mock.Mock(tekken7=None, tekken8=None, movesets=None, files=None, game='g', out=folder, no_shared=False,
-                         tekken8_movesets=None, all=True, remove=False)
+                         tekken8_movesets=None, all=True, remove=False, outfits=set())
 
-        def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None):
+        def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None, outfits=True):
             runs.append(name)
             return pack.write(folder, definition(name), {'.nud': b'nud'}, 0)
         with mock.patch.object(import_character, 'needs_packages'), \
@@ -342,12 +342,14 @@ class OnlyTekken8(unittest.TestCase):
         self.assertEqual(everyone, list(CHARACTERS))
         with tempfile.TemporaryDirectory() as d:
             runs, shared, out = self.add(d, everyone)
-        self.assertEqual(runs, ['reina'])
+        t8 = [f for f in CHARACTERS if game_of(definition(f)) == 'tekken8']
+        self.assertEqual(runs, t8)
         self.assertEqual(shared.call_args[0][0], None)                      # (no Tekken 7 for what the packs share)
         t7 = [f for f in CHARACTERS if game_of(definition(f)) == 'tekken7']
         self.assertEqual([line for line in out.splitlines() if line.startswith('@skipped')],
                          ['@skipped %s Tekken 7 is not installed' % f for f in t7])
-        self.assertIn('@added reina', out)
+        for f in t8:
+            self.assertIn('@added %s' % f, out)
 
     def test_tekken7_fighters_alone_need_tekken7(self):
         with tempfile.TemporaryDirectory() as d:
@@ -380,8 +382,9 @@ class LauncherStatus(unittest.TestCase):
             packs, movesets8, game = (os.path.join(d, n) for n in ('packs', 'movesets8', 'TEKKEN 8'))
             r = definition('reina')
             pack.write(packs, importer.with_stand_in(r) if stand_in else r, {'.nud': b'nud'}, 0)
-            if saved is not None:
-                write_saved(movesets8, {'zbr': saved}, {'build': 'old'})
+            if saved is not None:                  # (every Tekken 8 fighter's alike: one unsaved asks for the build)
+                write_saved(movesets8, {definition(f).TEKKEN8_CODE: saved for f in CHARACTERS
+                                        if game_of(definition(f)) == 'tekken8'}, {'build': 'old'})
             os.makedirs(os.path.join(game, 'Polaris', 'Content', 'Paks'))
             with mock.patch.dict(os.environ, HOME=d, TTT2_CHARACTERS=packs), \
                     mock.patch.object(source, 'find_tekken8', return_value=game if tekken8 else None), \

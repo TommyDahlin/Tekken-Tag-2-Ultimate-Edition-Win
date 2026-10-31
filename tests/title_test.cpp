@@ -8,6 +8,7 @@
 #include "title/draw.h"
 #include "title/font.h"
 #include "title/image.h"
+#include "title/pictures.h"
 #include "title/text.h"
 #include "title/title_screen.h"
 
@@ -284,6 +285,68 @@ void test_draw() {
     check(std::abs(area - 3.14159 * 36) < 2.0, "draw: a circle's area");
 }
 
+void test_distance() {
+    std::vector<uint8_t> set(7 * 5, 0);
+    set[2 * 7 + 1] = 1;
+    const std::vector<float> d = distance(set, 7, 5);
+    check(d[2 * 7 + 1] == 0 && d[2 * 7 + 4] == 3 && std::abs(d[0] - std::sqrt(5.0f)) < 1e-6f &&
+              std::abs(d[4 * 7 + 6] - std::sqrt(29.0f)) < 1e-5f,
+          "distance: exact Euclidean distances to the set pixel");
+    check(distance(std::vector<uint8_t>(4, 0), 2, 2)[3] > 1e9f, "distance: huge where nothing is set");
+}
+
+void test_pictures() {
+    for (int k = 0; k < 3; ++k) {
+        const Rgba white = pictures::white(static_cast<pictures::Device>(k));
+        size_t opaque = 0;
+        bool edges_clear = true;
+        for (uint32_t y = 0; y < white.height; ++y) {
+            for (uint32_t x = 0; x < white.width; ++x) {
+                const uint8_t* p = white.at(x, y);
+                if (p[3] == 255) ++opaque;
+                // Room round it for the glow.
+                if ((x < 8 || y < 8 || x >= white.width - 8 || y >= white.height - 8) && p[3] != 0) edges_clear = false;
+            }
+        }
+        const std::string name = "pictures " + std::to_string(k) + ": ";
+        check(white.width == pictures::kWidth && white.height == pictures::kHeight && opaque > 15000 && edges_clear,
+              name + "the device, with room for its glow");
+        const Rgba red = pictures::lit(white, pictures::kRedGlow, pictures::kRedTint);
+        // Along the middle row from the left: the glow outside, the tint inside.
+        const uint32_t y = white.height / 2;
+        uint32_t edge = 0;
+        while (edge < white.width && white.at(edge, y)[3] < 128) ++edge;
+        // (The pixel next to the edge is part outline.)
+        check(edge >= 17 && red.at(edge - 2, y)[0] > 240 && red.at(edge - 2, y)[1] < 10 && red.at(edge - 2, y)[3] > 150 &&
+                  red.at(edge - 17, y)[3] == 0,
+              name + "a red glow outside, gone some 14 pixels out");
+        check(red.at(edge + 3, y)[1] < white.at(edge + 3, y)[1], name + "tinted red inside the edge");
+        bool deep_same = true;
+        for (uint32_t x = 0; x < white.width; ++x) {
+            bool deep = true;
+            for (int dy = -28; dy <= 28 && deep; ++dy) {
+                for (int dx = -28; dx <= 28 && deep; ++dx) {
+                    const int px = int(x) + dx, py = int(y) + dy;
+                    deep = px >= 0 && py >= 0 && px < int(white.width) && py < int(white.height) &&
+                           white.at(uint32_t(px), uint32_t(py))[3] >= 128;
+                }
+            }
+            if (deep && std::memcmp(red.at(x, y), white.at(x, y), 4) != 0) deep_same = false;
+        }
+        check(deep_same, name + "deep inside, as it was");
+        const Rgba small = pictures::small(white);
+        size_t shadow = 0;
+        for (uint32_t sy = 0; sy < small.height; ++sy) {
+            for (uint32_t sx = 0; sx < small.width; ++sx) {
+                const uint8_t* p = small.at(sx, sy);
+                if (p[3] > 20 && p[0] < 10 && p[1] < 10 && p[2] < 10) ++shadow;
+            }
+        }
+        check(small.width == pictures::kSmallWidth && small.height == pictures::kSmallHeight && shadow > 150,
+              name + "small, on its shadow");
+    }
+}
+
 // ------------------------------------------------------------------ text banks
 
 struct Record {
@@ -435,6 +498,8 @@ int main() {
     test_font();
     test_glyph_tables();
     test_draw();
+    test_distance();
+    test_pictures();
     test_text();
     test_copyright_line();
     test_logo();

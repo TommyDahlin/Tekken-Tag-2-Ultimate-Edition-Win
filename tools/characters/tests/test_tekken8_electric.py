@@ -149,6 +149,7 @@ class ImporterEffect(unittest.TestCase):
                   {moveset.ELECTRIC_EFFECT: [('eff_koyuu00_kaz', None)]}, ['eff_koyuu00'])
         with mock.patch('ttt2char.tekken8.movenames.ttt2_movesets', return_value=['row'] * 66), \
                 mock.patch('ttt2char.tekken8.movenames.name_moves'), \
+                mock.patch('ttt2char.tekken8.movenames.name_known'), \
                 mock.patch('ttt2char.tekken8.movenames.harvest', return_value=(set(), set())), \
                 mock.patch('ttt2char.tekken8.motbin.read_bank', side_effect=lambda p: p), \
                 mock.patch('ttt2char.tekken8.anmbin.Bank'), \

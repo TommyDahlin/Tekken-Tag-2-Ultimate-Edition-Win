@@ -4,6 +4,11 @@ load_tekken7_model makes of a Tekken 7 costume (the TTT2 side of model.convert t
 * Each part (body, face, hair: the _msl meshes) is read with tekken8.mesh, its joints renamed with names.canonical
   (Tekken 7's names, a name of its own for every joint), the skeletons merged by name (model.merge_skeletons: the
   face mesh's joints first, as the definition's merge order says).
+* Parts bound to another rig than the first part's are re-bound to it first (rebind): Azucena's body and hair
+  extras are bound to a rig of her own proportions (hips 3 cm, head 4.3 cm higher, the control joints Top / Trans /
+  Rot anywhere), her face and hair to the standard one; Tekken 8 skins each mesh over its own bind, but merged by
+  name every disagreeing joint of the body became a copy the re-pose did not turn (her arms stayed in the A-pose
+  on T-pose bones). The standard rig is the one her animations are retargeted from (anim.load_skeleton).
 * The simulation proxies (the cloth solver's copies, mesh.SIM_MATERIALS) are left out, as the Tekken 7 loader
   leaves out a cloth's simulation copy.
 * Coordinates as for Tekken 7 (same units and axes: centimetres, Z up, facing +Y, left +X): Y and Z swapped,
@@ -17,6 +22,8 @@ load_tekken7_model makes of a Tekken 7 costume (the TTT2 side of model.convert t
 
 Written for this project from the files themselves (no third-party code).
 """
+from types import SimpleNamespace
+
 import numpy as np
 
 from ..convert import model as convert_model
@@ -26,6 +33,45 @@ from . import mesh as t8mesh, names
 
 def _weighted(geo):
     return set(np.unique(geo['joints'][geo['weights'] > 0]).tolist())
+
+
+def _near(m):
+    """A bind change too small to matter (convert/model.merge_skeletons's test: 0.05 cm, 1e-3)."""
+    return np.abs(m[:3, 3]).max() < 0.05 and np.abs(m[:3, :3] - np.eye(3)).max() < 1e-3
+
+
+def rebind(skel, geo, ref):
+    """A part bound to another rig than ref (a skeleton dict: names, parents, pose) -> (its skeleton with ref's joint
+    poses, its geometry moved with them: each vertex by its joints' changes of bind, blended by its weights; normals
+    and tangents turned), or (skel, geo) as they are when every joint skinned agrees. A joint ref lacks (or under
+    another parent) keeps its place under its parent."""
+    g = t7mesh.global_matrices(skel['pose'], skel['parents'])
+    rg = t7mesh.global_matrices(ref['pose'], ref['parents'])
+    at = {nm.lower(): i for i, nm in enumerate(ref['names'])}
+    new = np.empty_like(g)
+    for i, nm in enumerate(skel['names']):
+        p, j = skel['parents'][i], at.get(nm.lower())
+        same_parent = j is not None and ((p < 0 and ref['parents'][j] < 0) or (
+            p >= 0 and ref['parents'][j] >= 0 and ref['names'][ref['parents'][j]].lower() == skel['names'][p].lower()))
+        new[i] = rg[j] if same_parent else (new[p] @ np.linalg.inv(g[p]) @ g[i] if p >= 0 else g[i])
+    change = new @ np.linalg.inv(g)
+    if all(_near(change[i]) for i in _weighted(geo)):
+        return skel, geo
+    w = geo['weights'].astype(np.float64)
+    w = w / np.maximum(w.sum(1, keepdims=True), 1e-12)
+    blend = np.einsum('vk,vkij->vij', w, change[geo['joints']])
+    out = dict(geo)
+    out['positions'] = (np.einsum('vij,vj->vi', blend[:, :3, :3], geo['positions'].astype(np.float64))
+                        + blend[:, :3, 3]).astype(np.float32)
+
+    def turned(d):
+        t = np.einsum('vij,vj->vi', blend[:, :3, :3], d.astype(np.float64))
+        return (t / np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-12)).astype(np.float32)
+    out['normals'] = turned(geo['normals'][:, :3])
+    out['tangents'] = np.concatenate([turned(geo['tangents'][:, :3]), geo['tangents'][:, 3:]], 1)
+    pose = np.array([t7mesh.matrix_to_pose(np.linalg.inv(new[p]) @ new[i] if p >= 0 else new[i])
+                     for i, p in enumerate(skel['parents'])], np.float32)
+    return dict(skel, pose=pose), out
 
 
 def load_model(store, parts, merge_order, log=print):
@@ -46,8 +92,22 @@ def load_model(store, parts, merge_order, log=print):
         if geo['weights'].shape[1] > 8:
             raise ValueError('%s: %d skin influences (8 at most)' % (m.name, geo['weights'].shape[1]))
         loaded.append((tag, m, geo, source))
+    # parts bound to another rig than the first's: re-bound to it (the meshes keep their own skeletons: cloth.py
+    # moves their vertices by the merged bind over the mesh's own)
+    rigs, ref = {}, None
+    for tag, m, geo, source in sorted(loaded, key=lambda x: merge_order.index(x[0])):
+        if ref is None:
+            ref = m.skeleton
+            continue
+        rig, rebound = rebind(m.skeleton, geo, ref)
+        if rebound is not geo:
+            log('  %s: bound to another rig than %s\'s: re-bound to it (vertices moved %.1f cm at most)' % (
+                tag, merge_order[0], float(np.abs(rebound['positions'] - geo['positions']).max())))
+            rigs[tag] = SimpleNamespace(skeleton=rig)
+            loaded[[x[0] for x in loaded].index(tag)] = (tag, m, rebound, source)
     by_tag = {tag: (m, geo) for tag, m, geo, _ in loaded}
-    merged, remaps = cm.merge_skeletons([(t, by_tag[t][0], _weighted(by_tag[t][1])) for t in merge_order])
+    merged, remaps = cm.merge_skeletons([(t, rigs.get(t, by_tag[t][0]), _weighted(by_tag[t][1]))
+                                         for t in merge_order])
     pos, nrm, tan, uvs, jnt, wts, sections = [], [], [], [], [], [], []
     base, first, left_out, unknown = 0, {}, [], {}
     for tag, m, geo, source in loaded:

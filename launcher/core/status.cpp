@@ -55,9 +55,44 @@ std::optional<ImporterStatus> parse_status(std::string_view text, std::string* e
         fighter.update = fighter.added() && f["update"].boolean();
         fighter.moveset_saved = f["moveset_saved"].boolean();
         fighter.stand_in = fighter.added() && f["stand_in"].boolean();
+        fighter.outfits = static_cast<int>(f["outfits"].number(0));
+        fighter.outfits_added = fighter.added() && f["outfits_added"].boolean();
         s.fighters.push_back(std::move(fighter));
     }
     return s;
+}
+
+MainNews parse_main_news(std::string_view text) {
+    MainNews out;
+    std::string error;
+    const auto doc = json::parse(text, &error);
+    if (!doc || !doc->is_object()) {
+        out.error = doc ? "the answer is not a JSON object" : "the answer is not JSON (" + error + ")";
+        return out;
+    }
+    const json::Value& root = *doc;
+    if (root["error"].is_string()) {
+        out.error = root["error"].string();
+        return out;
+    }
+    out.ahead = static_cast<int>(root["ahead"].number());
+    out.head = root["head"].string();
+    out.page = root["page"].string();
+    for (const json::Value& c : root["changes"].items()) out.changes.push_back(c.string());
+    for (const json::Value& f : root["fighters"].items()) out.fighters.push_back(f.string());
+    for (const json::Value& f : root["new"].items()) out.fresh.emplace_back(f["name"].string(), f["display"].string());
+    return out;
+}
+
+std::string build_commit(std::string_view version) {
+    const size_t dash = version.rfind('-');
+    if (dash == std::string_view::npos) return {};
+    const std::string_view commit = version.substr(dash + 1);
+    if (commit.size() < 7) return {};
+    for (const char c : commit) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return {};
+    }
+    return std::string(commit);
 }
 
 Ownership parse_owned(std::string_view text) {

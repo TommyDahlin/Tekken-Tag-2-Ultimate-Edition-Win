@@ -157,7 +157,18 @@ def append_bones(skel, t7bones, weapon):
                 raise ValueError('weapon point slot %d (the slots are 0..%d)' % (slot, POINTS - 1))
         elif n >= POINT_FIRST + POINTS:
             raise ValueError('more than %d weapon points' % POINTS)
-        if isinstance(where, dict):
+        if isinstance(where, dict) and 'parent_local_offset' in where:
+            # Collision-only points follow the native parent bone independently
+            # of a weapon's animation pairs and the source mesh's bind axes.
+            delta = np.asarray(where['parent_local_offset'], dtype=float)
+            if delta.shape != (3,) or not np.isfinite(delta).all():
+                raise ValueError('parent-local collision offset must be three finite numbers')
+            x = hw[parent][:3, 3] + hw[parent][:3, :3] @ delta
+        elif isinstance(where, dict) and 'extend_cm' in where:
+            # A private point beyond an existing tip leaves all other moves'
+            # original tip/guard slots unchanged.
+            x = world_t7[t7[where['bone']]][:3, 3] + a[:, 0] * float(where['extend_cm']) * 10.0
+        elif isinstance(where, dict):
             x = world_t7[i][:3, 3] + np.asarray(where['world_offset'], dtype=float)
         elif isinstance(where, str):
             x = world_t7[t7[where]][:3, 3]

@@ -237,11 +237,9 @@ static void attach(void) {
         return;
     }
     g_delta = base - PREFERRED_BASE;
-    static const struct { const char* name; const struct Function* f; } all[] = {
-        {"ALLOCATE", &ALLOCATE}, {"FIGHTER_INFO", &FIGHTER_INFO}, {"LOAD_FIGHTER", &LOAD_FIGHTER},
-        {"LOAD_COMMON", &LOAD_COMMON}, {"FIXUP_MOVESET", &FIXUP_MOVESET},
-        {"FIXUP_MOVELIST", &FIXUP_MOVELIST}, {"LOAD_FILE", &LOAD_FILE}, {"FREE", &FREE}
-    };
+    fprintf(stderr, "attach: PID %lu, executable base 0x%llx\n", pid, base); fflush(stderr);
+    const struct Function* all[] = {&ALLOCATE, &FIGHTER_INFO, &LOAD_FIGHTER, &LOAD_COMMON, &FIXUP_MOVESET,
+                                    &FIXUP_MOVELIST, &LOAD_FILE, &FREE};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i) {
         unsigned long long got = 0;
         if (!hash_at(all[i].f, &got)) {

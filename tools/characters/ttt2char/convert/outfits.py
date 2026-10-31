@@ -3,9 +3,10 @@
 Keep gameplay definitions intact: a preset changes only the model inputs.
 """
 import types
+from pathlib import Path
 import numpy as np
 
-from . import art, chains, model, tiger, weapons
+from . import art, chains, face, model, tiger, weapons
 from ..tekken7.material import short_ref
 from ..ttt2 import bone, nud, nut
 from ..ttt2.archive import key_of
@@ -145,7 +146,7 @@ def relocate(model_bytes, texture_bytes, first):
     return nud.write(mesh), nut.write(textures)
 
 
-def build(paks, archives, rpx, base, slot, xml, springs, body, standing=None, log=print, reference_bon=None):
+def build(paks, archives, rpx, base, slot, xml, springs, body, standing=None, log=print, reference_bon=None, cached=None):
     """Build complete preset bodies and previews, sharing the base fighter's gameplay.
 
     springs(bon, cloth springs) -> a body's spring entries (.mop) or None (importer.spring_file); body: the base
@@ -159,7 +160,14 @@ def build(paks, archives, rpx, base, slot, xml, springs, body, standing=None, lo
         log('preset %d/%d: %s' % (i + 1, len(base.PRESETS), label))
         source_code = base.TEKKEN7_CODE.upper()
         costume = '/Game/Character/Item/Sets/%s/CS_%s_%s' % (source_code, source_code, preset)
-        if costume == base.TEKKEN7['costume']:
+        if cached is not None:
+            d = definition(paks, base, costume)
+            folder = Path(cached) / preset
+            mesh, textures, skeleton = [(folder / (base.CODE + ext)).read_bytes()
+                                       for ext in ('.nud', '.nut', '.bon')]
+            saved_springs = folder / (base.CODE + '.mop')
+            mop = saved_springs.read_bytes() if saved_springs.is_file() else springs(skeleton, None)
+        elif costume == base.TEKKEN7['costume']:
             d = types.SimpleNamespace(**{key: value for key, value in vars(base).items() if key.isupper()})
             mesh, textures, skeleton, mop = body
         else:
@@ -167,6 +175,8 @@ def build(paks, archives, rpx, base, slot, xml, springs, body, standing=None, lo
             mesh, textures, skeleton, _, cloth_springs = model.convert(paks, archives, d, slot, log=log,
                                                                        standing=standing)
             mop = springs(skeleton, cloth_springs)
+        if reference_bon is not None:
+            skeleton = face.same_joints(skeleton, reference_bon)
         mesh, textures = relocate(mesh, textures, 0x10500000 + (slot * TEXTURE_STRIDE + i) * 0x1000)
         files.update({code + '.nud': mesh, code + '.nut': textures, code + '.bon': skeleton, code + '.xml': xml})
         skel = bone.read(skeleton)

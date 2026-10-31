@@ -415,7 +415,7 @@ class Places(unittest.TestCase):
             self.assertEqual((pack.choose_slot(folder, 'aaa'), pack.choose_slot(folder, 'ccc')), (2, 0))
         self.assertEqual(pack.place(0), dict(id=64, row=58, column=19, grid_row=0, anchor='edd', columns=0))
         self.assertEqual((pack.place(5)['row'], pack.place(7)['column'], pack.place(7)['id']), (69, 23, 71))
-        self.assertEqual(pack.place(len(pack.CELLS))['anchor'], None)
+        self.assertEqual(pack.place(len(pack.CELLS) + len(pack.ROW_CELLS))['anchor'], None)
         cells = [(c[0], c[1]) for c in pack.CELLS]
         self.assertEqual(len(set(cells)), len(cells))
 
@@ -573,6 +573,27 @@ class Cells(unittest.TestCase):
         self.assertTrue(all(r == 0 and 0 <= c <= 22 for c, r in cells[:7]))
         self.assertTrue(all(c < 0 or c > 22 for c, _ in cells[7:]))
         self.assertEqual(pack.place(9), dict(id=73, row=73, column=23, grid_row=1, anchor='kum', columns=1))
+        # the new top row: every column but the '?' one, from the centre out
+        row = [(c[0], c[1]) for c in pack.ROW_CELLS]
+        self.assertEqual(sorted(row), [(c, -1) for c in range(-2, 25) if c != 11])
+        self.assertEqual([abs(c - 11) for c, _ in row], sorted(abs(c - 11) for c, _ in row))
+        self.assertEqual(pack.place(19), dict(id=83, row=83, column=12, grid_row=-1, anchor='kum', columns=-10))
+        every = cells + row
+        self.assertEqual(len(set(every)), len(every))
+        # the grid has the new row only for a fighter past the title's grid's room
+        self.assertFalse(pack.needs_new_row(range(19)))
+        self.assertFalse(pack.needs_new_row([]))
+        self.assertTrue(pack.needs_new_row([0, 19]))
+
+    def test_cells_as_the_port(self):
+        # roster.cpp kCells, kRowCells: the same cells in the same order
+        import re
+        with open(os.path.join(pack.REPOSITORY, 'runtime', 'src', 'title', 'roster.cpp')) as f:
+            text = f.read()
+        for name, cells in (('kCells', pack.CELLS), ('kRowCells', pack.ROW_CELLS)):
+            body = re.search(name + r'\[\] = \{(.*?)\};', text, re.S).group(1)
+            port = [(int(c), int(r)) for c, r in re.findall(r'\{(-?\d+), (-?\d+)\}', body)]
+            self.assertEqual(port, [(c[0], c[1]) for c in cells], name)
 
 
 class Effects(unittest.TestCase):

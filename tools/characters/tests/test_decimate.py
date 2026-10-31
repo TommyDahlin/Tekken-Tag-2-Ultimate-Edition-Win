@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from ttt2char import InputError, native                # noqa: E402
 from ttt2char.convert import decimate                  # noqa: E402
 
-HAVE_CC = bool(shutil.which('gcc') or shutil.which('cc'))
+HAVE_CC = bool(native.compiler())
 
 
 def model_of(pos, prims, nrm=None, uv=None, weights=None):
@@ -393,7 +393,7 @@ class Budget(unittest.TestCase):
 
 class Build(unittest.TestCase):
     def test_no_compiler_says_what_to_install(self):
-        env = {k: v for k, v in os.environ.items() if k not in ('CC', 'TTT2_NATIVE_DECIMATE')}
+        env = {k: v for k, v in os.environ.items() if k not in ('CC', 'TTT2_HELPER_CC', 'TTT2_NATIVE_DECIMATE')}
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(native.shutil, 'which', return_value=None):
             with self.assertRaises(InputError) as e:
@@ -404,7 +404,7 @@ class Build(unittest.TestCase):
     def test_built_once_into_the_cache(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {'TTT2_NATIVE_DECIMATE': ''}):
             lib = decimate._build(tmp)
-            self.assertEqual(lib, os.path.join(tmp, 'decimate.so'))
+            self.assertEqual(lib, native.output_path('decimate', cache=tmp))
             stamp = os.path.getmtime(lib)
             self.assertEqual(decimate._build(tmp), lib)
             self.assertEqual(os.path.getmtime(lib), stamp)

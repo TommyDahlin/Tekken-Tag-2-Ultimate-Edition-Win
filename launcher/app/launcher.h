@@ -39,6 +39,9 @@
 
 namespace launcher {
 
+// The commit this launcher was built from (build_commit.cpp, made by CMake), empty when not known.
+extern const char* const kBuildCommit;
+
 // The launcher's name: its window's title and its menu entry's (the
 // .desktop file says it again).
 inline constexpr const char* kName = "Ultimate Launcher";
@@ -148,6 +151,17 @@ private:
     // A game's characters, when that game is gone and only all of them at
     // once can be removed; else none.
     std::vector<std::string> to_remove_all(const std::string& game) const;
+    // Outfits: whether adding `fighter` makes theirs (their checkbox: as
+    // chosen, else as their pack in the game has them); the characters whose
+    // checkbox can be clicked (outfits to make, a pack this importer may
+    // make: the "every character" box sets these); a character in the game
+    // whose box no longer says what their pack has, so that updating them
+    // adds or removes their outfits; and those that can be updated for it now.
+    bool wants_outfits(const Fighter& fighter) const;
+    std::vector<const Fighter*> outfit_choices() const;
+    bool outfits_changed(const Fighter& fighter) const;
+    std::vector<std::string> outfits_to_change() const;
+    void outfits_line(GtkWidget* card);
     // What every import needs (the importer, Python's packages, the game).
     bool can_import(std::string* why = nullptr) const;
     // What importing a game's characters needs besides: that game, and the
@@ -233,6 +247,12 @@ private:
     // so (with Update and What's New) and the header bar's Update stands out.
     void check_release();
     void release_known(const ReleaseAnswer& answer);
+    // With the release check, when this build's commit is known: what the
+    // repository's main branch has beyond it (launcher.py main asks GitHub).
+    // Until a release brings it, the notice says so when no newer release is
+    // out, and so do the characters main gives a newer pack.
+    void check_main();
+    bool newer_on_main(const std::string& fighter) const;
     void show_update_notice();
     void open_release_page();
 
@@ -284,6 +304,10 @@ private:
     std::optional<LauncherUpdate> update_;
     std::optional<Release> newer_; // the newer release GitHub named last
     bool release_checking_ = false;
+    std::optional<MainNews> main_news_; // what main has beyond this build, as GitHub said last
+    bool main_checking_ = false;
+    std::string build_commit_; // this build's commit (the kit's VERSION names it), empty when not known
+    std::string notice_link_;  // what the notice's What's New opens
     std::chrono::steady_clock::time_point release_time_{}; // when GitHub was asked last
     fs::path kit_, importer_, python_;
     std::string kit_version_;
@@ -305,6 +329,7 @@ private:
     bool owned_answer_ = false;           // owned_ holds one
     std::string owned_error_;             // why asking failed
     bool dlc_expanded_ = false;
+    std::map<std::string, bool> outfits_; // the outfit checkboxes clicked, by character
     std::string remove_all_game_; // the game whose Remove All is being asked
 
     std::unique_ptr<Task> task_;

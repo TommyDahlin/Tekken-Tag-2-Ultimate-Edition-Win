@@ -245,9 +245,9 @@ static int matches(const struct Function* f) {
     return h == f->hash;
 }
 
-static void attach(void) {
+static void attach(DWORD requested_pid) {
     g_checked = g_ready = 0;
-    const DWORD pid = game_pid();
+    const DWORD pid = requested_pid ? requested_pid : game_pid();
     if (!pid) {
         out_printf("error Tekken 8 is not running\n");
         return;
@@ -611,7 +611,9 @@ static int serve(int port, const char* secret) {
         } else if (!strcmp(cmd, "dlc") && sscanf(line, "%*s %299[^\n]", arg) == 1) {
             dlc(arg);
         } else if (!strcmp(cmd, "attach")) {
-            attach();
+            unsigned long requested = 0;
+            sscanf(line, "%*s %lu", &requested);
+            attach((DWORD)requested);
         } else if (!strcmp(cmd, "ready")) {
             ready();
         } else if (!strcmp(cmd, "want") && sscanf(line, "%*s %299[^\n]", arg) == 1) {

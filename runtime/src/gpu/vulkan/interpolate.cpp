@@ -24,6 +24,7 @@
 // 3D scene, blend. When too few draws match (a new scene), the extra
 // frames show this frame as it is.
 
+#include "gpu/overlay.h"
 #include "gpu/vulkan/renderer.h"
 
 #include "gpu/latte.h"
@@ -33,6 +34,7 @@
 #include "cafe/runtime.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -198,18 +200,21 @@ void Renderer::init_interpolation() {
         fps = hz >= host::display::kInterpolationHz ? 120 : 60;
     }
     frames_per_frame_ = std::clamp((fps + 30) / 60, 1u, 4u);
-    if (frames_per_frame_ > 1) {
-        for (FrameRecord& f : frame_records_) {
-            // Cached: the CPU reads it back to match and blend frames
-            // (write-combined memory reads slowly).
-            f.data = ctx_.create_buffer(kMaxRecordedBytes,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                                            VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-        }
-    }
+    if (frames_per_frame_ > 1) create_records();
     std::fprintf(stderr, "ttt2: GPU: %u frames/s (%u per frame the title renders)\n", 60 * frames_per_frame_,
                  frames_per_frame_);
+}
+
+void Renderer::create_records() {
+    if (frame_records_[0].data.mapped != nullptr) return;
+    for (FrameRecord& f : frame_records_) {
+        // Cached: the CPU reads it back to match and blend frames
+        // (write-combined memory reads slowly).
+        f.data = ctx_.create_buffer(kMaxRecordedBytes,
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                        VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    }
 }
 
 // Every draw of a frame (or of a replay) gets the next index; a frame's
@@ -308,6 +313,10 @@ void Renderer::record_constants(uint32_t draw_index, const ConstantSources& sour
 // The replayed draw's constants: this frame's recorded data, blended with
 // the matching draw's data from the previous frame.
 void Renderer::replace_constants(uint32_t draw_index, abi::DrawConstants& dc) {
+    if (view_replay_) {
+        view_constants(draw_index, dc);
+        return;
+    }
     const FrameRecord& cur = frame_records_[current_record_];
     const FrameRecord& prev = frame_records_[current_record_ ^ 1];
     if (draw_index >= cur.draws.size()) return;
@@ -349,6 +358,103 @@ void Renderer::replace_constants(uint32_t draw_index, abi::DrawConstants& dc) {
     }
 }
 
+// ------------------------------------------------- the view window
+// The window from another camera (overlay::Window): the frame just swapped
+// rendered once more, after its extra frames, with the title's camera
+// matrix replaced wherever a draw's constants hold it (as the camera has
+// it, or transposed; in the block's byte order), and the TV image it ends
+// in kept for the overlay. The title culls its scene for its own camera,
+// so only what that camera could see is there to be seen.
+namespace {
+float word_float(const uint8_t* p, bool swapped) {
+    uint32_t w;
+    std::memcpy(&w, p, 4);
+    if (swapped) w = __builtin_bswap32(w);
+    return std::bit_cast<float>(w);
+}
+void put_word_float(uint8_t* p, float v, bool swapped) {
+    uint32_t w = std::bit_cast<uint32_t>(v);
+    if (swapped) w = __builtin_bswap32(w);
+    std::memcpy(p, &w, 4);
+}
+bool near(float a, float b) { return std::abs(a - b) <= 1e-4f + 1e-5f * std::abs(b); }
+} // namespace
+
+bool Renderer::logs_frames() {
+    const bool on = frames_per_frame_ > 1 || overlay::current().window != nullptr;
+    if (on && !logging_) {
+        create_records();
+        frame_records_[current_record_].clear();
+    }
+    if (overlay::current().window == nullptr) view_image_valid_ = false; // (none from long ago when it comes back)
+    logging_ = on;
+    return on;
+}
+
+bool Renderer::want_view_replay() {
+    if (!logging_ || overlay::current().window == nullptr) return false;
+    const uint64_t generation = overlay::window_generation();
+    if (generation == view_generation_) return false; // (no new window: a paused or held frame)
+    uint64_t done = 0;
+    VK_CHECK(vkGetSemaphoreCounterValue(ctx_.device, timeline_, &done));
+    if (done < previous_frame_ready_) return false; // (the GPU keeping up)
+    view_generation_ = generation;
+    return true;
+}
+
+void Renderer::view_constants(uint32_t draw_index, abi::DrawConstants& dc) {
+    const FrameRecord& cur = frame_records_[current_record_];
+    if (draw_index >= cur.draws.size()) return;
+    const DrawRecord& d = cur.draws[draw_index];
+    for (uint32_t i = 0; i < d.slot_count; ++i) {
+        const SlotRecord& s = cur.slots[d.first_slot + i];
+        abi::Buffer* table = constant_table(dc, s.stage, s.kind);
+        table[s.index] = descriptor(cur.data.address + s.offset, s.size, s.stride);
+        auto [it, fresh] = view_blocks_.try_emplace(s.offset, Blend{0, 0});
+        if (fresh) {
+            const uint8_t* block = cur.data.mapped + s.offset;
+            const uint32_t words = std::min(s.size / 4, 1024u); // (per-frame constants come first)
+            std::vector<std::pair<uint32_t, const float*>> found; // word, the matrix to write (transposed: odd entries)
+            std::vector<uint8_t> transposed;
+            for (const auto& w : view_windows_) {
+                const auto& window = *static_cast<const overlay::Window*>(w.get());
+                for (uint32_t at = 0; at + 16 <= words; ++at) {
+                    for (int t = 0; t < 2; ++t) {
+                        bool same = true;
+                        for (int k = 0; k < 16 && same; ++k) {
+                            const int from = t ? 4 * (k % 4) + k / 4 : k;
+                            same = near(word_float(block + 4 * (at + k), s.big_endian), window.from[from]);
+                        }
+                        if (same) {
+                            found.push_back({at, window.to});
+                            transposed.push_back(static_cast<uint8_t>(t));
+                            at += 15;
+                            break;
+                        }
+                    }
+                }
+                if (!found.empty()) break; // (the newest window this frame's camera matches)
+            }
+            if (!found.empty()) {
+                VkDeviceSize offset = 0;
+                uint8_t* out = upload(s.size, 256, offset);
+                std::memcpy(out, block, s.size);
+                for (size_t f = 0; f < found.size(); ++f) {
+                    for (int k = 0; k < 16; ++k) {
+                        const int from = transposed[f] ? 4 * (k % 4) + k / 4 : k;
+                        put_word_float(out + 4 * (found[f].first + k), found[f].second[from], s.big_endian);
+                    }
+                }
+                it->second = {ring_.address() + offset, ring_.chunk()};
+                ++view_replaced_;
+            }
+        }
+        if (it->second.address == 0) continue;
+        chunks_touched_ |= 1u << it->second.chunk;
+        table[s.index] = descriptor(it->second.address, s.size, s.stride);
+    }
+}
+
 void Renderer::forget_snapshots(uint32_t address, uint32_t size) {
     FrameRecord& f = frame_records_[current_record_];
     if (f.snapshots.empty()) return;
@@ -366,12 +472,12 @@ void Renderer::forget_snapshots(uint32_t address, uint32_t size) {
 // ------------------------------------------------- targets carried between frames
 
 void Renderer::note_target_written(const Target* t) {
-    if (frames_per_frame_ > 1 && !replaying_) const_cast<Target*>(t)->written_frame = frame_number_;
+    if (logging_ && !replaying_) const_cast<Target*>(t)->written_frame = frame_number_;
     queue_write_back(const_cast<Target*>(t));
 }
 
 void Renderer::note_target_read(const Target* c) {
-    if (frames_per_frame_ == 1 || replaying_ || c->written_frame == frame_number_ || c->carried) return;
+    if (!logging_ || replaying_ || c->written_frame == frame_number_ || c->carried) return;
     // Read before this frame writes it: the previous frames' content, kept
     // for the replays.
     Target* t = const_cast<Target*>(c);
@@ -409,6 +515,50 @@ void Renderer::begin_replay(uint32_t n) {
     replay_started_ = started;
     end_rendering();
     replaying_ = true;
+    if (n == 0) { // the view window's
+        view_replay_ = true;
+        replay_draw_ = 0;
+        view_replaced_ = 0;
+        view_blocks_.clear();
+        view_windows_.clear();
+        for (auto& w : overlay::recent_windows()) {
+            const auto& window = *w;
+            const bool seen = std::any_of(view_windows_.begin(), view_windows_.end(), [&](const auto& v) {
+                return std::memcmp(static_cast<const overlay::Window*>(v.get())->from, window.from, sizeof(window.from)) == 0;
+            });
+            if (!seen) view_windows_.push_back(w);
+        }
+        for (Target* t : carried_) {
+            if (t->written_frame + 1 != frame_number_ || !t->start_copied) continue;
+            if (!replayed_) copy_image(t->image, t->end_copy);
+            copy_image(t->start_copy, t->image);
+            t->written = stamp();
+        }
+        // The other targets the frame wrote, as they are: the replay must
+        // leave nothing behind for later frames, which may read them without
+        // writing them first (the pause menu keeps the picture of the scene
+        // it opened over and showed it from above).
+        view_kept_.clear();
+        for (const auto& owned : targets_) {
+            Target* t = owned.get();
+            if (t->written_frame + 1 != frame_number_ || (t->carried && t->start_copied)) continue;
+            if (t->view_copy.image == VK_NULL_HANDLE || t->view_copy.width != t->image.width ||
+                t->view_copy.height != t->image.height || t->view_copy.format != t->image.format) {
+                if (t->view_copy.image != VK_NULL_HANDLE) {
+                    submit(true);
+                    destroy_image(t->view_copy);
+                }
+                t->view_copy = create_image(t->image.format, t->image.aspect, t->image.width, t->image.height, 1, 1,
+                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                                VK_IMAGE_USAGE_SAMPLED_BIT,
+                                            VK_IMAGE_VIEW_TYPE_2D);
+            }
+            copy_image(t->image, t->view_copy);
+            view_kept_.push_back(t);
+        }
+        replayed_ = true;
+        return;
+    }
     replayed_ = true;
     replay_draw_ = 0;
     blended_.clear();
@@ -588,6 +738,36 @@ bool Renderer::want_replays() {
 void Renderer::end_replay() {
     end_rendering();
     replaying_ = false;
+    if (view_replay_) {
+        view_replay_ = false;
+        // Kept only when the camera was found: a frame the title rendered
+        // from another camera (the pause menu's, as it closes) would show
+        // that camera's view.
+        if (scan_valid_[0] && view_replaced_ > 0) {
+            const Image& scan = scan_[0];
+            if (view_image_.image == VK_NULL_HANDLE || view_image_.width != scan.width ||
+                view_image_.height != scan.height || view_image_.format != scan.format) {
+                if (view_image_.image != VK_NULL_HANDLE) {
+                    submit(true); // nothing recorded reads the old one any more
+                    destroy_image(view_image_);
+                }
+                view_image_ = create_image(scan.format, VK_IMAGE_ASPECT_COLOR_BIT, scan.width, scan.height, 1, 1,
+                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                           VK_IMAGE_VIEW_TYPE_2D);
+            }
+            copy_image(scan, view_image_);
+            view_image_valid_ = true;
+        }
+        for (Target* t : view_kept_) {
+            copy_image(t->view_copy, t->image);
+            t->written = stamp();
+        }
+        view_kept_.clear();
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - replay_started_).count();
+        replay_seconds_ += seconds;
+        frame_replay_seconds_ += seconds;
+        return;
+    }
     show_extra_frame();
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - replay_started_).count();
     replay_seconds_ += seconds;

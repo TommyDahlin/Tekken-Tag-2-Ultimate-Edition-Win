@@ -31,6 +31,10 @@ and Noctis's), as the game reads them. Fighters whose DLC your account does not 
 Movesets saved from your own Tekken 7 with TKMovesets2 work too (--movesets); DLC fighters are imported only when your
 Steam account owns them.
 
+--outfits chooses whose preset outfits are made (the complete bodies of the in-game costume chooser, each read
+from Tekken 7's costume sets): all (the default), none, or the fighters' names separated by commas. They take most
+of an import's time; a fighter without them has its default costume only. The launcher asks for them by name.
+
 --remove deletes fighters' packs again. The packs left keep their places (their files are made for them) and what
 they share is made again for them, from both games' files (not when only packs the game does not load go, which it
 never held); the next fighter imported takes the first free place. A pack an older importer made (launcher.py status
@@ -129,6 +133,9 @@ def main():
     parser.add_argument('--out', metavar='FOLDER',
                         help='where character packs go (default: $TTT2_CHARACTERS, else '
                              '$XDG_DATA_HOME/ttt2/characters, else ~/.local/share/ttt2/characters)')
+    parser.add_argument('--outfits', default='all', metavar='WHO',
+                        help='whose preset outfits to make: all (the default), none, or names separated by commas '
+                             '(they take most of an import\'s time; without them, the default costume only)')
     parser.add_argument('--no-shared', action='store_true',
                         help='leave what the packs share (shared/) as it is: for a fighter whose pictures, 2P colours '
                              'and name call have not changed (it is made all the same for a fighter that was not in '
@@ -152,6 +159,7 @@ def main():
             definition(fighter)
         except InputError as error:
             progress.fail(str(error))
+    args.outfits = outfits_of(args.outfits, fighters, progress)
     if not args.remove:
         needs_packages(progress)
     try:
@@ -160,6 +168,21 @@ def main():
         progress('error', 'the importer failed: %s: %s' % (type(error).__name__, error))
         raise
     progress('done')
+
+
+def outfits_of(who, fighters, progress):
+    """--outfits: the set of `fighters` whose preset outfits are made."""
+    from ttt2char import InputError
+    from ttt2char.characters import definition
+    if who == 'all':
+        return set(fighters)
+    names = [] if who == 'none' else [n.strip().lower() for n in who.split(',') if n.strip()]
+    for name in names:
+        try:
+            definition(name)
+        except InputError as error:
+            progress.fail('--outfits: %s' % error)
+    return set(names) & set(fighters)
 
 
 def everyone(args):
@@ -233,18 +256,26 @@ def add(args, fighters, progress):
         progress('step', 'fighter', fighter, n + 1, len(fighters))
         try:
             # what the packs share is made once, after the last fighter
+            outfits = fighter in args.outfits
             if fighter in tekken8_fighters:
-                target = importer.run(fighter, None, movesets8, game, out, make_shared=False, tekken8=tekken8)
+                target = importer.run(fighter, None, movesets8, game, out, make_shared=False, tekken8=tekken8,
+                                      outfits=outfits)
             else:
-                target = importer.run(fighter, tekken7, movesets, game, out, make_shared=False, files=files_folder)
+                target = importer.run(fighter, tekken7, movesets, game, out, make_shared=False, files=files_folder,
+                                      outfits=outfits)
         except InputError as error:
             progress.fail(str(error))
         slot = int(pack.read_ini(os.path.join(target, 'character.ini')).get('slot', '0'))
         cell = pack.place(slot)
-        rows = ('top', 'middle', 'bottom')
-        where = ('a cell at the %s end of the select screen\'s %s row' % ('left' if cell['column'] < 10 else 'right',
-                                                                         rows[cell['grid_row']])
-                 if cell['column'] is not None else 'no cell (the select screen is full)')
+        if cell['column'] is None:
+            where = 'no cell (the select screen is full)'
+        else:
+            side = 'left' if cell['column'] < 11 else 'right'   # (of the '?' column)
+            if cell['grid_row'] < 0:
+                where = 'a cell in the %s half of the select screen\'s new top row' % side
+            else:
+                where = 'a cell at the %s end of the select screen\'s %s row' % (
+                    side, ('top', 'middle', 'bottom')[cell['grid_row']])
         print('Done: %s has %s.' % (fighter, where))
         progress('added', fighter)
         if fighter in tekken8_fighters and pack.read_ini(os.path.join(target, 'character.ini')).get('stand_in'):

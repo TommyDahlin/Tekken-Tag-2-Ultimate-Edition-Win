@@ -337,6 +337,22 @@ std::optional<std::map<uint16_t, Glyph>> parse(const std::vector<uint8_t>& nfh) 
     return glyphs;
 }
 
+std::optional<Metrics> parse_metrics(const std::vector<uint8_t>& nfh) {
+    const auto l = layout(nfh);
+    const auto glyphs = parse(nfh);
+    if (!l || !glyphs) return std::nullopt;
+    Metrics m;
+    m.size = l->big_endian ? be32(&nfh[4]) : le32(&nfh[4]);
+    const auto pixels = [&](const uint8_t* p) { return static_cast<int16_t>(l->get16(p)) / 64.0; };
+    for (uint32_t i = 0; i < l->count; ++i) {
+        const uint8_t* r = l->record(nfh, i);
+        m.glyphs[Layout::code(r)] = PlacedGlyph{glyphs->at(Layout::code(r)),
+                                                Placement{pixels(r + Layout::kLeft), pixels(r + Layout::kTop),
+                                                          pixels(r + Layout::kAdvance)}};
+    }
+    return m;
+}
+
 bool copy_glyph(std::vector<uint8_t>& nfh, uint16_t code, uint16_t like) {
     const auto l = layout(nfh);
     uint8_t* to = l ? find(nfh, *l, code) : nullptr;

@@ -195,12 +195,14 @@ class Game(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    @unittest.skipIf(os.name == 'nt', 'Proton/MinGW discovery; native discovery is tested separately')
     def test_found_through_steams_files(self):
         with mock.patch.object(autodump, 'steams', return_value=[(self.steam, None)]):
             t8 = autodump.find_tekken8()
             self.assertEqual(autodump.tekken8_library(), (self.steam, self.lib, self.game))
         self.assertEqual((t8.game, t8.prefix, t8.proton, t8.library), (self.game, self.prefix, self.proton, self.lib))
 
+    @unittest.skipIf(os.name == 'nt', 'Proton/MinGW discovery; native discovery is tested separately')
     def test_not_usable(self):
         with mock.patch.object(autodump, 'steams', return_value=[(self.steam, 'flatpak')]):
             with self.assertRaisesRegex(autodump.DumpError, 'Flatpak'):
@@ -220,6 +222,7 @@ class Game(unittest.TestCase):
         with self.assertRaisesRegex(autodump.DumpError, 'verify'):
             autodump.game_version(self.lib, self.lib)
 
+    @unittest.skipIf(os.name == 'nt', 'Proton/MinGW discovery; native discovery is tested separately')
     def test_helper_built_once(self):
         cache = os.path.join(self.tmp.name, 'cache')
         exe = os.path.join(self.tmp.name, 'prebuilt.exe')

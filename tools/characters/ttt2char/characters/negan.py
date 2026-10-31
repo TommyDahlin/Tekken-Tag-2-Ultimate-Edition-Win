@@ -73,6 +73,9 @@ VOICE_PREFIX = 'na'
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'name': '[NEGAN]',
+    # 4,2 / 1,4,2: cover the bat through its model-defined tip.
+    # Keep the inner point; extend the outer capsule beyond the inferred 70 cm point.
+    'hitboxes': {'Na_rkrp': (0x72, 0, 0x70, 8)},
     # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
     'bounds': dict.fromkeys(('Na_2rp', 'Na_3lklprpkm', 'Na_4lrp', 'Na_4rprp', 'Na_Batrp', 'Na_Batrplk',
                              'Na_lprpwp'), True),

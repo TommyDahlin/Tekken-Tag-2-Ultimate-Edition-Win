@@ -50,20 +50,25 @@ import stat
 import subprocess
 import sys
 
-from . import InputError, signals
+from . import InputError, signals, paths
+from .convert import gauge
 from .characters import GAMES, game_of
 
 FILES = ('.xml', '.nud', '.nut', '.bon', '.moveset', '.motion')
 SHARED = 'shared'               # the packs' shared title entries
 PACK_FORMAT = 1                 # character.ini `format` of the packs made now (the port's kPackFormat, roster.cpp)
-REVISION = 3                    # what packs made before lack, for every fighter (1: cloth, outfits, move fixes;
-                                # 2: tag combos; Reina's throws, bounds and icon; 3: the definitions' bounds alone,
-                                # Tekken 7's after the Bound Mod: screws, tornados and slams no longer bound)
+REVISION = 6                    # what packs made before lack, for every fighter (1: cloth, outfits, move fixes;
+                                # 2: tag combos; Reina's throws, bounds and icon; 3: face animations and eyelids;
+                                # 5: main sync; 6: the definitions' bounds alone, Tekken 7's after the Bound Mod:
+                                # screws, tornados and slams no longer bound)
 # Added fighter k's place as the port gives it (roster.cpp): select id 64 + k, a motion row (what the moveset's
 # fighter fields hold: the rows no fighter has first, then 69 on) and a select grid cell (roster.cpp kCells): the free
-# ends of the top row, then columns beyond the grid's ends (-1 and 23, then -2 and 24). A cell is
-# (column, grid row, anchor, columns from it): its picture goes where the grid panel of fighter `anchor` (in grid
-# row 1, or the cell's own row) is, that many columns over, in the cell's row (row 0: at the top row's height).
+# ends of the top row, then columns beyond the grid's ends (-1 and 23, then -2 and 24), then (ROW_CELLS) a new top row
+# over the title's three, from the '?' column outwards: the grid has it only while a fighter's place is past CELLS
+# (needs_new_row; art.four_rows moves the grid down for it, shared/grid.ini tells the port). A cell is (column, grid
+# row, anchor, columns from it): its picture goes where the grid panel of fighter `anchor` (in grid row 1, or the
+# cell's own row) is, that many columns over, in the cell's row (row 0: at the top row's height; above it: rows'
+# pitches higher).
 FIRST_ID = 64
 DIRECT_ROWS = (58, 64, 61, 62, 65)
 FIRST_VIRTUAL_ROW = 69
@@ -73,6 +78,16 @@ CELLS = ((19, 0, 'edd', 0), (2, 0, 'bru', 0), (20, 0, 'lee', 0), (1, 0, 'rav', 0
          (-1, 2, 'mok', -1),
          (24, 1, 'kum', 2), (-2, 1, 'rog', -2), (24, 2, 'pan', 2), (-2, 2, 'mok', -2), (24, 0, 'kum', 2),
          (-2, 0, 'rog', -2))
+# right of the '?' column, then left, outwards (columns 0-10 from Roger's panel, 12-24 from Kuma's)
+ROW_CELLS = tuple(cell for right, left in zip(range(12, 25), range(10, -3, -1))
+                  for cell in ((right, -1, 'kum', right - 22), (left, -1, 'rog', left)))
+
+
+def needs_new_row(slots):
+    """Whether the select grid needs its new top row for fighters in these places."""
+    return any(k >= len(CELLS) for k in slots)
+
+
 MAX_FIGHTERS = 128              # (the port's kMaxFighters: places 0 to 127)
 CODE = re.compile(r'[a-z]{3}')  # a pack's code, as the port takes it
 REPOSITORY = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
@@ -82,15 +97,15 @@ def place(k):
     """dict(id, row, column, grid_row, anchor, columns) of added fighter k (the cell's fields None when the grid is
     full)."""
     row = DIRECT_ROWS[k] if k < len(DIRECT_ROWS) else FIRST_VIRTUAL_ROW + k - len(DIRECT_ROWS)
-    column, grid_row, anchor, columns = CELLS[k] if k < len(CELLS) else (None, None, None, None)
+    every = CELLS + ROW_CELLS
+    column, grid_row, anchor, columns = every[k] if k < len(every) else (None, None, None, None)
     return dict(id=FIRST_ID + k, row=row, column=column, grid_row=grid_row, anchor=anchor, columns=columns)
 
 
 def default_folder():
     if os.environ.get('TTT2_CHARACTERS'):
         return os.environ['TTT2_CHARACTERS']
-    data = os.environ.get('XDG_DATA_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'share')
-    return os.path.join(data, 'ttt2', 'characters')
+    return os.path.join(paths.data_root(), 'characters')
 
 
 def output_folder(folder):
@@ -98,9 +113,11 @@ def output_folder(folder):
     folder = os.path.abspath(os.path.expanduser(folder or default_folder()))
     real = os.path.realpath(folder)       # through symbolic links, which could lead into the repository
     # (installed, in <prefix>/share/ttt2/characters as in the AppImage, the importer is in no repository)
-    same_drive = os.path.splitdrive(os.path.normcase(real))[0] == os.path.splitdrive(os.path.normcase(REPOSITORY))[0]
-    in_repo = same_drive and os.path.commonpath([real, REPOSITORY]) == REPOSITORY
-    if os.path.exists(os.path.join(REPOSITORY, '.git')) and in_repo and not git_ignores(real):
+    try:
+        inside = os.path.normcase(os.path.commonpath([real, REPOSITORY])) == os.path.normcase(REPOSITORY)
+    except ValueError:
+        inside = False
+    if os.path.exists(os.path.join(REPOSITORY, '.git')) and inside and not git_ignores(real):
         raise InputError('the pack would go into the repository (%s): packs hold Namco\'s assets and must stay out '
                          'of it; leave out --out (the default is %s)' % (folder, default_folder()))
     return folder
@@ -109,6 +126,19 @@ def output_folder(folder):
 def git_ignores(folder):
     """Whether git ignores `folder` itself (as it does local/) in the repository (False when git cannot tell): a
     name no ignore pattern covers, in that folder."""
+    # The portable Windows launcher need not have the development app's Git
+    # on PATH. Recognize only the explicit private /local/ cache exclusion.
+    local = os.path.abspath(os.path.join(REPOSITORY, 'local'))
+    try:
+        canonical_local = os.path.realpath(local)
+        inside_local = os.path.normcase(os.path.commonpath([os.path.realpath(folder), canonical_local])) == os.path.normcase(canonical_local)
+        plain_local = os.path.normcase(canonical_local) == os.path.normcase(local)
+        with open(os.path.join(REPOSITORY, '.gitignore'), encoding='utf-8') as rules:
+            patterns = [line.strip() for line in rules]
+        if inside_local and plain_local and '/local/' in patterns and not any(p.startswith('!') for p in patterns):
+            return True
+    except (OSError, ValueError):
+        pass
     try:
         probe = os.path.join(folder, 'ttt2-pack-probe')
         return subprocess.run(['git', '-C', REPOSITORY, 'check-ignore', '-q', probe],
@@ -194,8 +224,10 @@ def revision(d):
     return REVISION + vars(d).get('REVISION', 0)
 
 
-def character_ini(d, slot, chr_tones=0, voice_extra=(), weapons=(), outfits=()):
+def character_ini(d, slot, chr_tones=0, voice_extra=(), weapons=(), outfits=(), sound_extra=(), gauge_sound=None):
     """voice_extra: the se_Chr tones of the shouts past the donor's (the port appends them to the voice list);
+    sound_extra: the se_Chr tones of its sound effects (the port appends them to its item sounds: convert/sounds.py);
+    gauge_sound: the item sound its gauge plays as it fills up (convert/gauge.py);
     weapons: weapons.of_skeleton's [(k, parent bone, [(point number, slot)], summon)] (the port poses them):
     k:parent:points[:summon], a point `n` hitting as slot n, else `n>slot`."""
     def item(k, parent, points, summon):
@@ -207,8 +239,10 @@ def character_ini(d, slot, chr_tones=0, voice_extra=(), weapons=(), outfits=()):
                revision(d))
             + ('stand_in = %s\n' % d.DONOR if getattr(d, 'WITHOUT_OWN_MOVESET', False) else '')
             + ('voice_extra = %s\n' % ' '.join(map(str, voice_extra)) if voice_extra else '')
+            + ('sound_extra = %s\n' % ' '.join(map(str, sound_extra)) if sound_extra else '')
             + ('weapons = %s\n' % ' '.join(item(*w) for w in weapons) if weapons else '')
-            + ('outfits = %s\n' % ' '.join(outfits) if outfits else ''))
+            + ('outfits = %s\n' % ' '.join(outfits) if outfits else '')
+            + (gauge.ini_line(d, gauge_sound) + '\n' if gauge.ini_line(d) else ''))
 
 
 def read_ini(path):
@@ -232,10 +266,10 @@ def number(value):
 def installed(folder):
     """The packs in the characters folder: [{'path', 'code', 'donor', 'slot' (None if it names none), 'format' (0:
     an older importer's; see above), 'revision' (0 without one), 'stand_in' (the code of the fighter whose moveset
-    it fights with because its own could not be had, '' for none), 'valid' (the port takes it: a three-letter code
-    and a donor), 'current' (valid and of PACK_FORMAT: the port loads it), 'newer' (valid and of a later format)}], by
-    folder name. A folder whose
-    name starts with a dot is none (write()'s pack being made, or the one it replaces; the port skips them too)."""
+    it fights with because its own could not be had, '' for none), 'outfits' (how many preset outfits it has),
+    'valid' (the port takes it: a three-letter code and a donor), 'current' (valid and of PACK_FORMAT: the port loads
+    it), 'newer' (valid and of a later format)}], by folder name. A folder whose name starts with a dot is none
+    (write()'s pack being made, or the one it replaces; the port skips them too)."""
     out = []
     if not os.path.isdir(folder):
         return out
@@ -252,7 +286,8 @@ def installed(folder):
         valid = bool(CODE.fullmatch(v.get('code', ''))) and v.get('donor', '') != ''
         out.append(dict(path=path, code=v.get('code', ''), donor=v.get('donor', ''), slot=number(v.get('slot', '')),
                         format=form, revision=number(v.get('revision', '')) or 0, stand_in=v.get('stand_in', ''),
-                        valid=valid, current=valid and form == PACK_FORMAT, newer=valid and form > PACK_FORMAT))
+                        outfits=len(v.get('outfits', '').split()), valid=valid,
+                        current=valid and form == PACK_FORMAT, newer=valid and form > PACK_FORMAT))
     return out
 
 
@@ -348,7 +383,8 @@ def target_of(folder, d):
     return real
 
 
-def write(folder, d, files, slot, chr_tones=0, voice_extra=(), weapons=(), outfits=()):
+def write(folder, d, files, slot, chr_tones=0, voice_extra=(), weapons=(), outfits=(), sound_extra=(),
+          gauge_sound=None):
     """Writes the pack <folder>/<code>/ from files {suffix or file name: bytes} (a suffix starts with '.': the file
     is <code><suffix>); returns its path. The pack is made whole in a hidden folder beside its place first
     (.<code>.part, character.ini last), which then takes the place of the fighter's earlier pack: that one goes
@@ -361,7 +397,8 @@ def write(folder, d, files, slot, chr_tones=0, voice_extra=(), weapons=(), outfi
     part, old = _working(real)
     out = {(d.CODE + name if name.startswith('.') else name): data for name, data in files.items()}
     out.pop('character.ini', None)
-    out['character.ini'] = character_ini(d, slot, chr_tones, voice_extra, weapons, outfits).encode('utf-8')
+    out['character.ini'] = character_ini(d, slot, chr_tones, voice_extra, weapons, outfits,
+                                         sound_extra, gauge_sound).encode('utf-8')
     os.makedirs(os.path.dirname(real), exist_ok=True)
     for path in (part, old):                        # (a killed write's, or one that could not be deleted)
         try:

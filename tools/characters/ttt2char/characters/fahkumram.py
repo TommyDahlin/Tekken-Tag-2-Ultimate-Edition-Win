@@ -72,24 +72,36 @@ ART = {
 
 VOICE_PREFIX = 'nc'
 
-# An invisible hand point lowers b+1 collision by 40 mm; no drawn mesh.
-WEAPONS = [{'bone': 'L_Hand', 'parent': 'TE_L_jnt', 'pair': None,
-            'points': {0xfe: {'world_offset': (0, -40, 0)}}}]
+# Invisible collision points extend attacks downwards without changing their
+# visible animations. Bind-pose offsets are calibrated against active-frame
+# rotations: approximately 200 mm, 220 mm and 550 mm lower at impact.
+WEAPONS = [
+    {'bone': 'L_Hand', 'parent': 'TE_L_jnt', 'pair': None,
+     'points': {0xfe: {'world_offset': (-120, -154, -45)}}},
+    {'bone': 'R_Foot', 'parent': 'ASHI_R_jnt', 'pair': None,
+     'points': {0xfd: {'world_offset': (-43, 7, 219)}}},
+    {'bone': 'R_Hand', 'parent': 'TE_R_jnt', 'pair': None,
+     'points': {0xfc: {'world_offset': (338, 343, -291)}}},
+]
 
 # the id maps: Heihachi in both games, and his generic moves against TTT2's (Heihachi, the donor, Asuka)
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
     'direct_buffered_strings': ('Nc_6lk',),
-    'hitboxes': {'Nc_lp00B': (0xfe, 0, 0xfe, 11)},
+    'tag_combos': {'Nc_66rklkrp': 'air'},
+    'hitboxes': {
+        'Nc_lp00B': (0xfe, 0, 0xfe, 11),        # b+1
+        'Nc_lprplprk': (0xfd, 0, 0xfd, 15),    # 1,2,1,4: final kick
+        'Nc_66WP': (0xfc, 0, 0xfc, 9),         # f,f+1+2: grounded reach
+    },
+    # Devil Jin b+4's native grounded flip, leaving standing/air hits alone.
+    'downed_reactions': {'Nc_66WP': 'dDwrOUC00_'},
     'air_reactions': {'Nc_lp00B': 'J8_jprk00',
                       'Nc_66rklkrp': (23, 'Jn_mc03s')},
-    # tag combo (convert/tagcombo.py) of f,f+4,3,2 only on an airborne opponent (until 2026-10-26 it tagged out
-    # with Heihachi's EWGF exit animation, now with its own)
-    'tag_combos': {'Nc_66rklkrp': 'air'},
     'air_reaction_reference': 40,  # Jinpachi u+4, airborne reaction
-    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
-    'bounds': dict.fromkeys(('Nc_2lp', 'Nc_2lrk', 'Nc_3rklklk', 'Nc_3rplp', 'Nc_66rklp', 'Nc_WK00F',
-                             'Nc_jplp00F'), True),
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds; d/f+1,4's second hit none
+    'bounds': {**dict.fromkeys(('Nc_2lp', 'Nc_2lrk', 'Nc_3rklklk', 'Nc_3rplp', 'Nc_66rklp', 'Nc_WK00F',
+                                'Nc_jplp00F'), True), 'Nc_3lprk': False},
     'name': '[FAHKUMRAM]',
     # Preserve Fahk's running 3 (ncss_mach) and d+4 (ncss_2rk), despite generic names.
     'own_moves': r'^(Co_runlk00|Co_t_srk00)$',

@@ -23,8 +23,8 @@ MOVESET_SOURCE = 'tekken8'
 # update the helper does not know yet): the TTT2 fighter (code, motion row) whose moveset she fights with instead,
 # as it is (MOVESET_SOURCE 'donor'), the donor of everything then (importer.with_stand_in)
 STAND_IN = ('hei', 13)        # Heihachi Mishima
-# what packs of her made before lack (pack.revision; the launcher shows "Update ready"): 1: the d/f+1,2 bound
-REVISION = 1
+# Revision 5 combines our Bound/Sentai fixes with the incoming T8 cloth fixes.
+REVISION = 5
 
 # ------------------------------------------------------------------------------------------------ model
 # her Tekken 8 costumes: the CustomizeSet CS_zbr_<name> (tekken8/costume.py: its meshes, their merge order and the
@@ -94,11 +94,44 @@ MOVESET = {
     'direct': [(r'^Ju_sKAM00_$', 'move', ['Zbr_sKAM00_']),                      # Jun's stance -> hers
                (r'^(ju|mk)_s', 'anim', ['zbr_s%02d' % k for k in range(3)]),    # intros
                (r'^ju_w', 'anim', ['zbr_w%02d' % k for k in range(3)])],        # win poses
+    # These source names are validated against both T8 hashes and the name
+    # length, never guessed from a source table index. SEN/WRA names were
+    # recovered from the saved stance inputs: sen_RP=Sentai 2, sen_RK=Sentai 4,
+    # kon_WK=Heaven's Wrath 3+4.
+    'move_name_seeds': ('Zbr_sen_RP', 'Zbr_sen_RK', 'Zbr_sen_WP2', 'Zbr_kon_WK', 'Zbr_sen_WK', 'Zbr_sen_WK2'),
     # TTT2 bounds (Tekken 8 has none, and its tornados do not become any): an air hit slams the opponent into the
     # floor once per juggle (convert/move_overrides.py). d+2 Tecchuu-ate, f+4 Kamadhatu Splits
-    # Kick, the same kick out of a dash (Zbr_66RK: f,f+4 by the donor's dash rows; Tekken 8's after a Heat Dash), and
-    # d/f+1,2's second hit (Zbr_3LPRP)
-    'bounds': {'Zbr_2RP': True, 'Zbr_6RK': True, 'Zbr_66RK': True, 'Zbr_3LPRP': True},
+    # Kick, the same kick out of a dash (Zbr_66RK: f,f+4 by the donor's dash rows; Tekken 8's after a Heat Dash),
+    # d/f+1,2's second hit (Zbr_3LPRP), 3+4, Sentai 4 and Heaven's Wrath 3+4; the others named none
+    'bounds': {
+        'Zbr_2RP': True,       # d+2
+        'Zbr_6RK': True,       # f+4
+        'Zbr_66RK': True,      # source Heat-Dash variant of f+4; not a separate f,f+4 command
+        'Zbr_3LPRP': True,     # d/f+1,2, second hit
+        'Zbr_WK': True,        # 3+4
+        'Zbr_sen_RK': True,    # SEN 4
+        'Zbr_kon_WK': True,    # WRA 3+4
+        'Zbr_LKRP': False,     # 3,2
+        'Zbr_3RKRPLK': False,  # d/f+4,2,3
+        'Zbr_RPRPRPLP': False, # 2,2,2,1
+        'Zbr_4RK': False,      # b+4
+        'Zbr_8RK': False,      # u+4
+        'Zbr_sen_WP2': False,  # SEN 1+2, second hit
+        'Zbr_9RK': False,      # u/f+4
+        'Zbr_sen_RP': False,   # SEN 2
+        'Zbr_sen_WK': False,   # SEN 3+4, first hit
+        'Zbr_sen_WK2': False,  # SEN 3+4, automatic second hit
+    },
+    # 2+Tag buffered during d/f+1 selects the Tag Assault second hit directly.
+    # The source demo buffers 3,2 before the simple command walker can follow
+    # its second row. Bind this stable text entry to the same gameplay rule.
+    'bound_entries': {'TEXT_000_MOVELIST_NAME_ZBR_010': ('Zbr_LKRP', 2),
+                      'TEXT_000_MOVELIST_NAME_ZBR_073': ('Zbr_sen_WP2', 2)},
+    # Restore SEN 3+4 as an ordinary simultaneous-button stance input.
+    'native_stance_inputs': {'Zbr_sen_WK': (0x185, 0x182)},
+    'tag_assault_strings': {'Zbr_3LP': ('Zbr_3LPRP',)},
+    # The tagged second hit must finish before its automatic stance-return rows.
+    'tag_assault_finish_hit': ('Zbr_3LPRP',),
     # tag combos (convert/tagcombo.py picks her launchers): EWGF and WGF for certain, as TTT2's Kazuya has them
     'tag_combos': {'Zbr_shoryu_S': True, 'Zbr_shoryu_N': True},
 }

@@ -45,6 +45,7 @@ def project_id(which, slot):
 # sample rates tried in turn: the first that keeps a bank no bigger than the donor's (the title's sound memory is
 # sized for its own banks)
 RATES = (48000, 32000, 24000)
+EFFECT_RATE = 32000             # the sound effects' (append_effects)
 # The title's tables (code/Tekken.rpx): fighters' codes, voice lists and the sound table
 CODES = 0x107C57F4              # 63 x char*: each fighter's code, by select id
 VOICE_LISTS = 0x107D44EC        # 63 x {entries*, count, fighter}; an entry 16 B {0, sound id, 0x4000 | k, u16 mask, 0}
@@ -173,12 +174,15 @@ def _audio(original, clip, channels, to, side=None):
     return wave(list(a), to), to, channels, a.shape[1]
 
 
-def build(clips, donor_banks, code, vlist, slot):
+def build(clips, donor_banks, code, vlist, slot, effects=()):
     """donor_banks: {'se_Chr': bytes, 'se_Dwi': bytes, 'rm_Dst': bytes, 'rm_Dwi': bytes}; vlist: the donor's voice
-    list (voice_list); slot: the fighter's number (its banks' project ids) -> ({file name: bytes}, report lines, win quotes {Tekken 7 event name: the se_Dwi tone that
-    plays it (moves play win quotes by tone)}, the shouts' tones appended to se_Chr (its voice list's extra entries:
-    shouts number len(donor's shouts) on)). se_Chr follows the voice list; the other banks take clips in turn from
-    one round of each kind (rm_Dwi gets a win quote se_Dwi has not)."""
+    list (voice_list); slot: the fighter's number (its banks' project ids); effects: sound effects (clips, as
+    clips') its moves play as item sounds (convert/sounds.py) -> ({file name: bytes}, report lines, win quotes {Tekken 7
+    event name: the se_Dwi tone that plays it (moves play win quotes by tone)}, the shouts' tones appended to se_Chr
+    (its voice list's extra entries: shouts number len(donor's shouts) on), the effects' tones appended to se_Chr
+    after them (append_effects)).
+    se_Chr follows the voice list; the other banks take clips in turn from one round of each kind (rm_Dwi gets a win
+    quote se_Dwi has not)."""
     out, report, wins, extra = {}, [], {}, []
     counter = {}
     for which, data in donor_banks.items():
@@ -198,7 +202,32 @@ def build(clips, donor_banks, code, vlist, slot):
         report.append('%s_%s: %d tones of its own%s, %d Hz, %d KB (the donor\'s %d KB)'
                       % (which, code, len(used), ' (%d shouts appended)' % len(extra_here) if extra_here else '',
                          rate, len(written) // 1024, len(data) // 1024))
-    return out, report, wins, extra
+    effect_tones = []
+    if effects:
+        bank = Bank(out['se_Chr_%s.nus3bank' % code])
+        effect_tones = append_effects(bank, effects)
+        out['se_Chr_%s.nus3bank' % code] = bank.write()
+        report.append('se_Chr_%s: %d sound effects appended (%d Hz), %d KB' % (
+            code, len(effects), EFFECT_RATE, len(out['se_Chr_%s.nus3bank' % code]) // 1024))
+    return out, report, wins, extra, effect_tones
+
+
+def append_effects(bank, clips):
+    """Appends the fighter's sound effects (convert/sounds.py: its moves play them as item sounds) to its se_Chr
+    bank, each a copy of the donor's item sound tone (itm_lar_03; else of a tone with audio) -> their tones."""
+    t = next((i for i in range(len(bank.tones)) if (bank.name(i) or '').startswith('itm_') and bank.has_audio(i)),
+             None)
+    if t is None:
+        t = next(i for i in range(len(bank.tones)) if bank.name(i) and bank.has_audio(i))
+    old, audio = bank.name(t), bank.audio[t]
+    _, channels, _ = bank.format(t)
+    tones = []
+    for j, clip in enumerate(clips):
+        i = bank.append(bank.renamed(t, old[:-2] + '%02X' % (0xA0 + j)), audio=audio)
+        a, rate, ch, n = _audio(audio, clip, channels, EFFECT_RATE)
+        bank.replace(i, a, rate, ch, n)
+        tones.append(i)
+    return tones
 
 
 def voice_values(clips, vlist):

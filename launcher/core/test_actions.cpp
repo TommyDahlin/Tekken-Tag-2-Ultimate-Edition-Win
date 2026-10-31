@@ -62,7 +62,7 @@ std::optional<std::vector<TestAction>> parse_test_actions(std::string_view text,
         } else if (a.name == "uninstall") {
             a.args = {rest};
             ok = rest == "keep" || rest == "all";
-        } else if (a.name == "focus") {
+        } else if (a.name == "focus" || a.name == "toggle") {
             a.args = {rest};
             ok = !rest.empty();
         } else if (a.name == "add-all" || a.name == "remove-all") {

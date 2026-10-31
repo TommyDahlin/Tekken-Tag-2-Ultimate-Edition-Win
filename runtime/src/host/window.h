@@ -9,8 +9,10 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace cafe::host {
@@ -30,6 +32,30 @@ enum class Controller { kOther, kPlayStation, kNintendo };
 Controller active_controller();
 // Called on the event loop's thread when the kind changes.
 void on_controller_change(std::function<void(Controller)> callback);
+
+// What a player holds, for pictures of it: the keyboard, or a gamepad by
+// its maker (kXbox: any other gamepad).
+enum class Device { kKeyboard, kXbox, kPlayStation, kNintendo };
+
+// The title's controllers: the GamePad (0) and Pro Controllers 1-4.
+constexpr size_t kControllers = 5;
+
+// Players with controllers of their own, in the title's modes for several
+// players: `check` says whether the title is in one, told whether any
+// device has taken a controller (asked on the event loop's thread).
+// Outside them every device drives the GamePad, as one player's. In them
+// the first device to press + takes the GamePad, and every other one that
+// presses + a Pro Controller of its own; devices that have not pressed +
+// drive the GamePad until it is taken, then nothing. Leaving the mode
+// gives them all back to the GamePad.
+void on_own_controllers(std::function<bool(bool joined)> check);
+
+// The device on each of the title's controllers; none where no device is.
+// While every device drives the GamePad, its device is the one used last.
+// TTT2_DEVICES=keyboard,playstation,... sets them for good (testing).
+std::array<std::optional<Device>, kControllers> controller_devices();
+// Called on the event loop's thread when they change.
+void on_controller_devices_change(std::function<void()> callback);
 
 // Runs the event loop until `finished` returns true or the window closes.
 // Returns false if the user closed the window.

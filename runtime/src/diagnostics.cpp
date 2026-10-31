@@ -2,10 +2,17 @@
 #include "cafe/ppc_ops.h"
 #include "cafe/runtime.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
 #include <signal.h>
 #include <ucontext.h>
 #include <unistd.h>
+
+#endif
 
 #include <chrono>
 #include <cstdio>
@@ -33,6 +40,27 @@ void print_backtrace(const PPCContext& ctx) {
     }
 }
 
+#ifdef _WIN32
+LONG WINAPI windows_fault_handler(EXCEPTION_POINTERS* exception) {
+    const auto code = exception->ExceptionRecord->ExceptionCode;
+    const auto pc = exception->ExceptionRecord->ExceptionAddress;
+    std::fprintf(stderr, "\nhost exception 0x%08lX at %p\n", code, pc);
+    if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) &&
+        exception->ExceptionRecord->NumberParameters >= 2) {
+        const auto address = exception->ExceptionRecord->ExceptionInformation[1];
+        const auto base = reinterpret_cast<uintptr_t>(guest_base());
+        if (base && address >= base && address - base < (uint64_t{1} << 32) + 0x10000)
+            std::fprintf(stderr, "guest memory fault at 0x%08llX\n",
+                static_cast<unsigned long long>(address - base));
+    }
+    const auto module = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    std::fprintf(stderr, "host executable offset: 0x%llX\n",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pc) - module));
+    if (t_current) print_guest_state(*t_current);
+    std::fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#else
 void fault_handler(int signal, siginfo_t* info, void* context) {
     const auto host = reinterpret_cast<uintptr_t>(info->si_addr);
     const auto base = reinterpret_cast<uintptr_t>(guest_base());
@@ -62,6 +90,7 @@ void fault_handler(int signal, siginfo_t* info, void* context) {
     }
     std::_Exit(128 + signal);
 }
+#endif
 
 } // namespace
 
@@ -96,6 +125,10 @@ void fatal(const char* format, ...) {
 }
 
 void install_fault_handler() {
+#ifdef _WIN32
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    SetUnhandledExceptionFilter(windows_fault_handler);
+#else
     static char alternate_stack[64 * 1024];
     stack_t stack{};
     stack.ss_sp = alternate_stack;
@@ -106,6 +139,7 @@ void install_fault_handler() {
     action.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGSEGV, &action, nullptr);
     sigaction(SIGBUS, &action, nullptr);
+#endif
 }
 
 } // namespace cafe

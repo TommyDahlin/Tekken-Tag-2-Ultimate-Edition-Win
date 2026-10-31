@@ -24,7 +24,7 @@
 #include <set>
 #include <string>
 
-#include <openssl/evp.h>
+#include "host/digest.h"
 
 namespace cafe::gpu::vk {
 namespace {
@@ -401,8 +401,7 @@ void Renderer::load_texture(Texture& t) {
         const uint32_t ew = (r.width + block - 1) / block, eh = (r.height + block - 1) / block;
         std::vector<uint8_t> level0(size_t{ew} * eh * f.bytes);
         detile(tiled_level(0), ew, eh, 0, 1, level0.data());
-        unsigned int length = 0;
-        EVP_Digest(level0.data(), level0.size(), md5.data(), &length, EVP_md5(), nullptr);
+        md5 = host::digest<16>(level0);
         if (trace) {
             static std::set<std::array<uint8_t, 16>> seen;
             if (seen.insert(md5).second) {
@@ -563,7 +562,7 @@ void Renderer::invalidate(uint32_t address, uint32_t size, uint32_t coherency_fl
 }
 
 void Renderer::cpu_wrote(uint32_t address, uint32_t size) {
-    if (frames_per_frame_ > 1) forget_snapshots(address, size);
+    if (logging_) forget_snapshots(address, size);
     const uint64_t end = uint64_t{address} + size;
     static const uint32_t watch = [] {
         const char* w = std::getenv("TTT2_WATCH");

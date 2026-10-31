@@ -79,7 +79,19 @@ VOICE_PREFIX = 'kt'
 
 # the id maps: Heihachi in both games, and her generic moves against TTT2's (Heihachi, the donor, Asuka)
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
+# Keep both BT 1 stance-side variants: their generic names hide Kunimitsu's
+# own ktkb_s4_blp animation and BT 1,2 / BT 1,3 follow-ups.
+REVISION = 3
+
 MOVESET = {
+    'own_moves': r'^Co_R_(?:rp00L|lp00R)$',
+    # Native movement/tag groups also reference the donor's BT jab directly.
+    # Only exact 1 presses should use her attack, not native 2 or 1+2 turns.
+    'generic_input_replacements': {'Co_R_rp00L': 0x40000001, 'Co_R_lp00R': 0x40000001},
+    # Preserve normal arm coverage; add a lower private point for both BT 1 sides.
+    'hitboxes': {'Co_R_rp00L': (12, 13, 0xfe, 11),
+                 'Co_R_lp00R': (12, 13, 0xfe, 11),
+                 'Kt_Se_lp_LK': (0xfd, 0, 0xfd, 19)},
     'buffered_stance_transitions': {'Kt_rk00F': 'Kt_shoryu02'},
     'name': '[KUNIMITSU]',
     # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds
@@ -98,15 +110,15 @@ HIDE = [('gla', 'ATH_L_hand_mask_knm')]
 # no scalp); Tekken 7 shows the mask over it: the hair in front of the mask's face is left out
 COVERED = [('har', 'MI_CH_knm_gla_1p_Mask')]
 
-# her blades, not drawn, posed by her animations' extra pairs (weapons.py): the left hand's short sword (pair 0; with
+# her blades, drawn and posed by her animations' extra pairs (weapons.py): the left hand's short sword (pair 0; with
 # the other left-hand pairs it is the kunai she throws, which Tekken 7 flies by these pairs, up to 7 m out) and the
 # right hand's (pair 3); the points they hit with (Tekken 7 hit locations) are Tekken 7's own: the swords' tips, the
 # kunai's ends
 _WEAPONS = _ITEM + '/Meshes/knm/extra/knm_exp_1p/Meshes/SK_CH_knm_exp_1p'
 WEAPONS = [
-    {'mesh': _WEAPONS, 'draw': False, 'bone': 'ATH_L_weapon001', 'parent': 'TE_L_jnt', 'pair': 0,
+    {'mesh': _WEAPONS, 'draw': True, 'bone': 'ATH_L_weapon001', 'parent': 'TE_L_jnt', 'pair': 0,
      'points': {0x74: 'ATH_L_weapon001_top', 0x76: 'ATH_L_weapon001_top', 0x77: 'ATH_L_weapon001_hilp'}},
-    {'mesh': _WEAPONS, 'draw': False, 'bone': 'ATH_R_weapon001', 'parent': 'TE_R_jnt', 'pair': 3,
+    {'mesh': _WEAPONS, 'draw': True, 'bone': 'ATH_R_weapon001', 'parent': 'TE_R_jnt', 'pair': 3,
      'points': {0x75: 'ATH_R_weapon001_top'}},
 ]
 # her Piercing Kunai Throw (d, d/f, f + 1) and the kunai ending her low-high kicks: Tekken 7 flies the kunai by those
@@ -119,3 +131,16 @@ THROWN = {'Kt_236LP': dict(frame=15, forward=1200, up=350, speed=460, frames=13,
                            item=_KUNAI, trail=40),
           'Kt_2lkrk_LP': dict(frame=26, forward=1200, up=350, speed=470, frames=13, radius=150, height=250,
                               item=_KUNAI, trail=40)}
+
+# Slots 1 and 2 are unused by her converted attacks (the old kunai tip/hilt
+# were replaced by projectiles). Later invisible points take those slots;
+# the left sword's slot 0 and right sword's slot 3 keep their original reach.
+# Offsets are in the parent bone's local frame, in mm, calibrated at impact:
+# BT 1: 350 mm below its hand at frame 15; BT 1,3: 100 mm ahead of
+# the knee at frame 22 (93 mm at frame 23). Models/animation stay unchanged.
+WEAPONS += [
+    {'bone': 'L_Hand', 'parent': 'TE_L_jnt', 'pair': None,
+     'points': {0xfe: ({'parent_local_offset': (87.579403, -313.689518, 128.174626)}, 1)}},
+    {'bone': 'L_Leg', 'parent': 'HIZA_L_jnt', 'pair': None,
+     'points': {0xfd: ({'parent_local_offset': (-46.328674, -88.211068, -8.512432)}, 2)}},
+]

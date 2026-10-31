@@ -89,7 +89,9 @@ class Status(unittest.TestCase):
             self.assertEqual(list(fighters), list(importer.CHARACTERS))
             self.assertEqual(fighters['kazumi'], {'name': 'kazumi', 'display': 'Kazumi Mishima', 'dlc': None,
                                                   'installed': False, 'outdated': False, 'newer': False,
-                                                  'update': False, 'moveset_saved': False})
+                                                  'update': False, 'moveset_saved': False, 'outfits': 9,
+                                                  'outfits_added': False})
+            self.assertEqual(fighters['reina']['outfits'], 0)
             self.assertEqual(fighters['eliza']['dlc'], 592370)
 
     def test_tekken7_as_the_importer_finds_it(self):
@@ -133,6 +135,11 @@ class Status(unittest.TestCase):
             self.assertTrue(s['movesets']['heihachi'])
             self.assertEqual(s['packs_folder'], os.path.join(d, 'packs'))
             self.assertEqual(s['game'], {'path': os.path.join(install, 'game'), 'error': None})
+            self.assertFalse(fighters['kazumi']['outfits_added'])
+            with open(os.path.join(d, 'packs', 'kzm', 'character.ini'), 'a') as f:
+                f.write('outfits = kza kzb\n')
+            fighters = {f['name']: f for f in launcher.status(install, os.path.join(d, 'movesets'))['fighters']}
+            self.assertTrue(fighters['kazumi']['outfits_added'])
 
 
 class Folders(unittest.TestCase):
@@ -224,23 +231,35 @@ class Progress(unittest.TestCase):
         return code, [line for line in out.getvalue().splitlines() if line.startswith('@')]
 
     def test_import_lines(self):
-        def imported(name, tekken7, movesets, game, out, make_shared, files):
+        def imported(name, tekken7, movesets, game, out, make_shared, files, outfits=True):
             self.assertFalse(make_shared)                    # (made once, after the last)
             made_pack(out, importer.definition(name).CODE, 3)
+            outfits_made[name] = outfits
             return os.path.join(out, importer.definition(name).CODE)
 
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(autodump, 'tekken7_library', return_value=('s', 'l', 't7')), \
-                mock.patch('ttt2char.tekken7.pak.Paks'), mock.patch.object(importer, 'tekken7_paks'), \
-                mock.patch.object(importer, 'saved_movesets', return_value={26: 'k', 22: 'c', 8: 'h'}), \
-                mock.patch.object(autodump, 'unsaved_files', return_value=[]), \
-                mock.patch.object(importer, 'run', side_effect=imported), \
-                mock.patch.object(importer, 'make_shared') as shared:
-            code, lines = self.main(['kazumi', 'chloe', '--game', 'g', '--out', d, '--progress'])
-        self.assertEqual(code, 0)
-        self.assertEqual(lines, ['@step fighter kazumi 1 2', '@added kazumi', '@step fighter chloe 2 2', '@added chloe',
-                                 '@step shared', '@done'])
-        shared.assert_called_once()
+        for given, expected in ((None, {'kazumi': True, 'chloe': True}), ('none', {'kazumi': False, 'chloe': False}),
+                                ('Chloe, akuma', {'kazumi': False, 'chloe': True})):
+            outfits_made = {}
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(autodump, 'tekken7_library', return_value=('s', 'l', 't7')), \
+                    mock.patch('ttt2char.tekken7.pak.Paks'), mock.patch.object(importer, 'tekken7_paks'), \
+                    mock.patch.object(importer, 'saved_movesets', return_value={26: 'k', 22: 'c', 8: 'h'}), \
+                    mock.patch.object(autodump, 'unsaved_files', return_value=[]), \
+                    mock.patch.object(importer, 'run', side_effect=imported), \
+                    mock.patch.object(importer, 'make_shared') as shared:
+                code, lines = self.main(['kazumi', 'chloe', '--game', 'g', '--out', d, '--progress']
+                                        + (['--outfits', given] if given else []))
+            self.assertEqual(code, 0)
+            self.assertEqual(lines, ['@step fighter kazumi 1 2', '@added kazumi', '@step fighter chloe 2 2',
+                                     '@added chloe', '@step shared', '@done'])
+            shared.assert_called_once()
+            self.assertEqual(outfits_made, expected, given)
+
+    def test_outfits_of_an_unknown_fighter(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, lines = self.main(['kazumi', '--outfits', 'kazumi,nobody', '--game', 'g', '--out', d, '--progress'])
+        self.assertEqual(code, 1)
+        self.assertTrue(lines[-1].startswith('@error --outfits: '), lines)
 
     def test_a_stand_in_says_why(self):
         def imported(name, tekken7, movesets, game, out, make_shared=True, tekken8=None, **kw):

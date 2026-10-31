@@ -10,6 +10,7 @@ TEKKEN7_ID = 32
 TEKKEN7_CODE = 'mrx'
 CODE = 'mrx'
 SEX = 'male'
+REVISION = 2                  # his gauge (1: packs made before have his EX moves free); its full sound (2)
 
 # Ordered built-in Tekken 7 preset sets for the native costume chooser.
 PRESETS = (
@@ -72,6 +73,20 @@ VOICE_PREFIX = 'mx'
 
 # the id maps: Heihachi in both games, and his generic moves against TTT2's (Heihachi, the donor, Asuka)
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
+_SPECIAL_TARGETS = (
+    'Ry_shinhadouken', 'Ry_EX_hadoh', 'Ry_hadohB',
+    'Ry_shoryuBEX', 'Ry_shoryuB', 'Ry_shoryu',
+    'Ry_hadoh', 'Ry_EXtatumaki', 'Ry_tatumakiB',
+    'Ry_tatumaki', 'Ry_ShadohEX', 'Ry_ShadohB',
+    'Ry_Shadoh', 'Mx_asyura', 'Mx_hyakiC',
+    'Mx_hyakiD', 'Mx_asyurab', 'Mx_saving_cn',
+)
+
+# The Super Combo gauge (convert/gauge.py): two stocks of 500; his gains as Tekken 7 has them since its 2019 patch; the
+# sound Tekken 7 plays as it fills up
+GAUGE = dict(max=1000, stock=500, gain=(37, 75, 112, 225), hud='/Game/UI_Common/Flash/sw_ui_hud_rage/sw_ui_hud_rage',
+             full_sound='SE_battle_spgauge_full')
+
 MOVESET = {
     # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds, and d/f+1+2 (Mx_3lrp)
     'bounds': dict.fromkeys(('Mx_3lprp2', 'Mx_66rk', 'Mx_6lrp', 'Mx_6lrp2', 'Mx_hyaki_gouB', 'Mx_kkt2',
@@ -80,14 +95,41 @@ MOVESET = {
     'startup_trim': {'Mx_3lrp': 4, 'Mx_66rk': 4},
     'name': '[AKUMA]',
     # Keep Akuma's own WS2 and crouching punches rather than donor equivalents.
-    'own_moves': r'^Co_(s_trp00|t_slp00(?:y2?)?|t_srp00|t_slk00|syarp03|syalp00(?:y)?|syarp00)$',
-    'special_cancels': {
-        name: ('Ry_shoryu', 'Ry_shoryuB', 'Ry_tatumaki', 'Ry_tatumakiB',
-               'Ry_hadoh', 'Ry_hadohB', 'Mx_hyakiC', 'Mx_hyakiD')
-        for name in ('Mx_rp00', 'Mx_lp00', 'Mx_lplp', 'Mx_syalk00',
-                     'Co_s_trp00', 'Co_t_slp00', 'Co_t_srp00',
-                     'Co_syalp00', 'Co_syarp00', 'Co_t_slk00', 'Co_syarp03', 'Mx_4lp00', 'Mx_s_tlk00')
+    'own_moves': (
+        r'^Mx_6lrk_zanku_EX$|'
+        '(?:^Co_(s_trp00|t_slp00(?:y2?)?|t_srp00|t_slk00|syarp03|syalp00(?:y)?|syarp00)$)|^(?:Co_R_clp00R|'
+        'Co_R_crp00L|Co_R_lp00R|Co_R_rp00L|Co_s_tlp00|Co_s_trp00|Co_syalp00|Co_syarp00|Co_syarp03|Co_t_slk00|'
+        'Co_t_slp00|Co_t_srp00|Mx_4lp00|Mx_6lrk|Mx_asyura|Mx_asyurab|Mx_hyakiC|Mx_hyakiD|Mx_lp00|Mx_lplp|'
+        'Mx_rp00|Mx_sDASHB_sv|Mx_sDASHF_sv|Mx_sSTEPB_sv|Mx_s_tlk00|Mx_saving|Mx_saving_cn|Mx_syalk00|'
+        'Ry_6lrk_EXtatumaki|Ry_EX_hadoh|Ry_EXtatumaki|Ry_Shadoh|Ry_ShadohB|Ry_ShadohB2|Ry_ShadohEX|Ry_hadoh|'
+        'Ry_hadohB|Ry_shinhadouken|Ry_shoryu|Ry_shoryu3|Ry_shoryuB|Ry_shoryuB2|Ry_shoryuBEX|Ry_shoryuB_tmk|'
+        'Ry_shoryu_tmk|Ry_tatumaki|Ry_tatumakiB)$'
+    ),
+    # Native routes, including EX/super and Focus cancels. Keep special
+    # sources restricted to the targets present in T7 rather than granting
+    # every normal's targets to every special.
+    'special_cancels': {name: _SPECIAL_TARGETS for name in (
+        'Mx_lp00', 'Mx_lplp', 'Mx_4lp00',
+        'Mx_rp00', 'Co_R_rp00L', 'Co_R_lp00R',
+        'Co_syalp00', 'Co_syarp03', 'Co_syarp00',
+        'Co_R_crp00L', 'Co_R_clp00R', 'Mx_syalk00',
+        'Co_t_slp00', 'Co_t_srp00', 'Co_t_slk00',
+        'Co_s_tlp00', 'Co_s_trp00', 'Mx_s_tlk00',
+    )} | {
+        'Mx_6lrk': ('Mx_6lrk_zanku_EX', 'Ry_6lrk_EXtatumaki'),
+        'Ry_hadohB': ('Mx_saving_cn',),
+        'Ry_hadoh': ('Mx_saving_cn',),
+        'Ry_Shadoh': ('Mx_saving_cn',),
+        'Ry_ShadohB': ('Mx_saving_cn',),
+        'Ry_ShadohB2': ('Mx_saving_cn',),
+        'Ry_shoryu_tmk': ('Mx_saving_cn',),
+        'Ry_shoryu': ('Mx_saving_cn',),
+        'Ry_shoryu3': ('Mx_saving_cn',),
+        'Ry_shoryuB_tmk': ('Mx_saving_cn',),
+        'Ry_shoryuB': ('Mx_saving_cn',),
+        'Ry_shoryuB2': ('Mx_saving_cn',),
     },
+    'noncontact_special_cancels': ('Ry_hadohB', 'Ry_hadoh', 'Ry_Shadoh', 'Ry_ShadohB', 'Ry_ShadohB2'),
     # Preserve T7's early motion capture and contact-time dispatch.
     'buffered_special_cancels': True,
     'buffered_special_timing': {

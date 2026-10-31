@@ -23,14 +23,14 @@ DEFAULT_OUT = os.path.join(os.path.expanduser('~/.local/share'), 'ttt2', 'tekken
 
 def main():
     sys.path.insert(0, HERE)
-    from ttt2char import InputError, importer, signals
+    from ttt2char import InputError, importer, paths, signals
     from ttt2char.tekken7 import autodump
     from ttt2char.tekken7.pak import Paks
     signals.stop_on_signals()               # (SIGTERM closes the hidden Tekken 7 as Ctrl+C does)
     parser = argparse.ArgumentParser(description='Save Tekken 7 movesets in the background, for import_character.py.')
     parser.add_argument('fighter', nargs='*', help='fighters (the importer\'s names); none with --all')
     parser.add_argument('--all', action='store_true', help='every fighter the importer knows')
-    parser.add_argument('--out', default=DEFAULT_OUT, metavar='FOLDER', help='where the .tkmvst files go (default: %(default)s)')
+    parser.add_argument('--out', default=paths.movesets(), metavar='FOLDER', help='where the .tkmvst files go (default: %(default)s)')
     parser.add_argument('--files', default=autodump.FILES, metavar='FOLDER',
                         help='where the files Tekken 7 keeps encrypted go, as the game reads them (default: %(default)s; '
                              'import_character.py reads them there)')

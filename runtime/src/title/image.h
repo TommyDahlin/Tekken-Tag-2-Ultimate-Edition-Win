@@ -25,6 +25,12 @@ Rgba resize(const Rgba& image, uint32_t width, uint32_t height);
 // `image` over `into` at (x, y), replacing what is there.
 void put(Rgba& into, const Rgba& image, uint32_t x, uint32_t y);
 
+// Each pixel's distance to the nearest set one of `set` (width x height,
+// rows top first): Euclidean, exact (the lower envelope of parabolas,
+// Felzenszwalb and Huttenlocher's method, along rows then columns); huge
+// where none is set.
+std::vector<float> distance(const std::vector<uint8_t>& set, uint32_t width, uint32_t height);
+
 namespace ntp3 {
 
 // Texture formats of the container.

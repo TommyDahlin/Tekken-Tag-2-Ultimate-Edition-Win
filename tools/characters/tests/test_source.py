@@ -207,11 +207,14 @@ class RunStandIn(unittest.TestCase):
     retargeted) and motions (data005 row 13) in the pack, no command list, its item database, a warning; shared/ gets
     her source and Tekken 7's folders."""
 
-    def test_run(self):
+    @contextlib.contextmanager
+    def reina(self, **run):
+        """importer.run('reina', ..., **run) on the stand-ins below -> (target, lines, opened, build, made, src, motion),
+        while its output folder lasts."""
         motion = b'MOTION PACK'
         archives = mock.Mock()
         archives.has.return_value = True
-        archives.read_name.side_effect = lambda name: {'hei.xml': b'<hei/>'}[name]
+        archives.read_name.side_effect = lambda name: {'hei.xml': b'<hei/>', 'hei.bon': b'bon'}[name]
         archives.entry.side_effect = lambda what, row: {('data006', 13): donor_moveset(),
                                                          ('data005', 13): motion}[(what, row)]
         src = mock.Mock(game='tekken8', NAME='Tekken 8')
@@ -236,6 +239,8 @@ class RunStandIn(unittest.TestCase):
                    mock.patch.object(importer.voice, 'voice_list', return_value='vlist'),
                    mock.patch.object(importer.voice, 'merge', return_value=(b'merged', 39)),
                    mock.patch.object(importer.bone, 'read', return_value={}),
+                   mock.patch.object(importer.face, 'retarget', side_effect=lambda moves, motions, *rest: (
+                       moves, motions, 0, {})),
                    mock.patch.object(importer.weapons, 'of_skeleton', return_value=()),
                    mock.patch.object(importer, '_shared', side_effect=lambda s, *rest: made.append(s))]
         with tempfile.TemporaryDirectory() as out, contextlib.ExitStack() as stack:
@@ -243,9 +248,13 @@ class RunStandIn(unittest.TestCase):
                 stack.enter_context(p)
             opened = stack.enter_context(mock.patch.object(source, 'open_tekken8', return_value=src))
             build = stack.enter_context(mock.patch.object(importer.voice, 'build',
-                                                          return_value=(dict(banks), [], {}, ())))
+                                                          return_value=(dict(banks), [], {}, (), ())))
             lines = []
-            target = importer.run('reina', None, None, 'g', out, log=lines.append, files='/saved', tekken8='t8')
+            target = importer.run('reina', None, None, 'g', out, log=lines.append, files='/saved', tekken8='t8', **run)
+            yield target, lines, opened, build, made, src, motion
+
+    def test_run(self):
+        with self.reina() as (target, lines, opened, build, made, src, motion):
             files = set(os.listdir(target))
             with open(os.path.join(target, 'rei.moveset'), 'rb') as f:
                 moves = f.read()
@@ -270,6 +279,24 @@ class RunStandIn(unittest.TestCase):
         self.assertIs(sources(definition('reina')), src)
         self.assertEqual(sources.files, '/saved')
 
+    def test_outfits_only_when_asked(self):
+        """run(outfits=): a definition's preset outfits made into the pack, or left out. (The parameter once had the
+        name of the module that makes them, which it hid: every import with outfits failed.)"""
+        own = definition('reina')
+        with_presets = types.ModuleType(own.__name__)
+        with_presets.__dict__.update(vars(own))
+        with_presets.PRESETS = (('DefaultCos1P', 'Default'), ('cos2', 'Second'))
+        for asked in (True, False):
+            with mock.patch.object(importer, 'definition', return_value=with_presets), \
+                    mock.patch.object(importer.outfits, 'build', return_value={'raa.nud': b'outfit'}) as made, \
+                    mock.patch.object(importer.outfits, 'codes', return_value=['raa', 'rab']), \
+                    self.reina(outfits=asked) as (target, *_):
+                ini = pack.read_ini(os.path.join(target, 'character.ini'))
+                files = set(os.listdir(target))
+            self.assertEqual(made.called, asked)
+            self.assertEqual(ini.get('outfits'), 'raa rab' if asked else None)
+            self.assertEqual('raa.nud' in files, asked)
+
 
 class RunOwnVoice(unittest.TestCase):
     """importer.run for Reina with her Tekken 8 moveset saved: the lines her moves say join her clips before the
@@ -279,7 +306,7 @@ class RunOwnVoice(unittest.TestCase):
     def test_run(self):
         archives = mock.Mock()
         archives.has.return_value = True
-        archives.read_name.side_effect = lambda name: {'jun.xml': b'<jun/>'}[name]
+        archives.read_name.side_effect = lambda name: {'jun.xml': b'<jun/>', 'jun.bon': b'bon'}[name]
         k = mock.Mock(name='her moveset')
         src = mock.Mock(game='tekken8', NAME='Tekken 8')
         clips = src.clips.return_value
@@ -300,6 +327,8 @@ class RunOwnVoice(unittest.TestCase):
                    mock.patch.object(importer.voice, 'voice_list', return_value='vlist'),
                    mock.patch.object(importer.voice, 'merge', return_value=(b'merged', 39)),
                    mock.patch.object(importer.bone, 'read', return_value={}),
+                   mock.patch.object(importer.face, 'retarget', side_effect=lambda moves, motions, *rest: (
+                       moves, motions, 0, {})),
                    mock.patch.object(importer.weapons, 'of_skeleton', return_value=()),
                    mock.patch.object(importer, '_shared')]
         with tempfile.TemporaryDirectory() as out, contextlib.ExitStack() as stack:
@@ -307,7 +336,7 @@ class RunOwnVoice(unittest.TestCase):
                 stack.enter_context(p)
             stack.enter_context(mock.patch.object(source, 'open_tekken8', return_value=src))
             stack.enter_context(mock.patch.object(importer.voice, 'build', side_effect=lambda *a: (
-                order.append('banks'), (dict(banks), [], {}, ()))[1]))
+                order.append('banks'), (dict(banks), [], {}, (), ()))[1]))
             values = stack.enter_context(mock.patch.object(importer.voice, 'voice_values', return_value='values'))
             convert = stack.enter_context(mock.patch.object(
                 importer, '_converted_tekken8_moveset', return_value=(b'moves', b'motions', b'<jun/> body', {}, None)))
@@ -373,9 +402,9 @@ class ImportTekken8(unittest.TestCase):
         runs, shared = [], []
         args = mock.Mock(tekken7=tekken7, tekken8=tekken8, movesets=os.path.join(folder, '.m'),
                          files=os.path.join(folder, '.f'), game='g', out=folder, no_shared=False,
-                         tekken8_movesets=None)
+                         tekken8_movesets=None, outfits=set())
 
-        def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None):
+        def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None, outfits=True):
             runs.append((name, t7, tekken8, make_shared))
             return pack.write(folder, definition(name), {'.nud': b'nud'}, 0)
 
@@ -454,7 +483,8 @@ class Launcher(unittest.TestCase):
         fighters = {f['name']: f for f in s['fighters']}
         self.assertEqual(fighters['reina'], {'name': 'reina', 'display': 'Reina', 'dlc': None, 'installed': False,
                                              'outdated': False, 'newer': False, 'update': False,
-                                             'moveset_saved': False, 'stand_in': False, 'game': 'tekken8'})
+                                             'moveset_saved': False, 'outfits': 0, 'outfits_added': False,
+                                             'stand_in': False, 'game': 'tekken8'})
         self.assertNotIn('game', fighters['kazumi'])
         self.assertEqual(s['tekken8'], {'found': False, 'path': None,
                                         'error': 'Tekken 8 is not installed in any Steam library',

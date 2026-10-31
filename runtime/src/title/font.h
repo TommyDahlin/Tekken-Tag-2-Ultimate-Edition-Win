@@ -34,6 +34,18 @@ struct Placement {
 // Code point -> glyph.
 std::optional<std::map<uint16_t, Glyph>> parse(const std::vector<uint8_t>& nfh);
 
+// Code point -> glyph with its placement, and the font's size, for laying
+// text out.
+struct PlacedGlyph {
+    Glyph box;
+    Placement placement;
+};
+struct Metrics {
+    uint32_t size = 0; // in pixels
+    std::map<uint16_t, PlacedGlyph> glyphs;
+};
+std::optional<Metrics> parse_metrics(const std::vector<uint8_t>& nfh);
+
 // Gives the glyph for `code` the box, placement and line height of the
 // glyph for `like`. False if the table lacks either.
 bool copy_glyph(std::vector<uint8_t>& nfh, uint16_t code, uint16_t like);

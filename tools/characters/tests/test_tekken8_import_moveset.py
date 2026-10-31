@@ -356,7 +356,9 @@ class ConvertStep(unittest.TestCase):
         self.assertEqual(out, (b'moves', b'motions', b'<jun/> body', {'alo/x': b'fx'}, None))
         name_moves.assert_called_once()
         self.assertIs(name_moves.call_args[0][0], k)
-        name_known.assert_called_once_with(other, {b'Co_a'})
+        name_known.assert_has_calls([mock.call(k, [n.encode('ascii') for n in d.MOVESET['move_name_seeds']]),
+                                     mock.call(other, {b'Co_a'})])
+        self.assertEqual(name_known.call_count, 2)
         self.assertEqual(maps.call_args, mock.call([k], ttt2, references=[other]))
         args = Converter.call_args[0]
         self.assertEqual(args[:5], (k, None, 'row 42', ('data005', 42), 'row 13'))
@@ -412,11 +414,11 @@ class ImportTekken8(unittest.TestCase):
     def test_folder_reaches_the_import(self):
         runs = []
         args = mock.Mock(tekken7=None, tekken8='/games/TEKKEN 8', movesets=None, files=None, game='g', out=None,
-                         no_shared=True, tekken8_movesets='~/t8')
+                         no_shared=True, tekken8_movesets='~/t8', outfits=set())
         with tempfile.TemporaryDirectory() as out_dir:
             args.out = out_dir
 
-            def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None):
+            def run(name, t7, movesets, game, out, make_shared=True, files=None, tekken8=None, outfits=True):
                 runs.append((name, movesets, tekken8))
                 return importer.pack.write(out_dir, definition(name), {'.nud': b'nud'}, 0)
             with mock.patch.object(import_character, 'needs_packages'), \

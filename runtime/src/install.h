@@ -6,7 +6,9 @@
 // entry. The installed executable, or this one started without arguments,
 // then finds the game by itself.
 //
-// <install folder>/Tekken Tag Tournament 2   the executable
+// Windows: <install folder>/TTT2 Ultimate.exe and a TTT2 Ultimate desktop shortcut.
+// <install folder>/.ttt2-userdata             Windows pack/save locations (UTF-8, absolute)
+// <install folder>/Tekken Tag Tournament 2   the executable on Linux
 // <install folder>/icon.png                  meta/iconTex.tga
 // <install folder>/game/                     code/, content/, meta/ of the title
 // <install folder>/.ttt2-install             written last: the install is complete
@@ -31,6 +33,9 @@ int run(const std::vector<std::string>& args);
 // The installed game's title folder: next to this executable, else where
 // the last install went. None if there is no complete install.
 std::optional<std::filesystem::path> installed_game();
+
+// Apply installed Windows pack/save settings; explicit environment overrides win.
+void configure_user_paths();
 
 // A TGA image (the title's icon and boot images) as RGBA rows, top first.
 bool decode_tga(const std::vector<uint8_t>& tga, std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height);

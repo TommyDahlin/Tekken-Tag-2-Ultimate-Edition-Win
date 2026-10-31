@@ -33,7 +33,7 @@ CHLOE = mock.Mock(CODE='dnc', NAME='Lucky Chloe', DONOR='jun', SEX='female')
 
 def write(path, text=''):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
 
 
@@ -48,7 +48,7 @@ def old_kazumi(folder):
 
 
 def files_in(folder):
-    return sorted(os.path.relpath(os.path.join(top, name), folder) for top, _, names in os.walk(folder)
+    return sorted(os.path.relpath(os.path.join(top, name), folder).replace(os.sep, '/') for top, _, names in os.walk(folder)
                   for name in names)
 
 
@@ -222,7 +222,7 @@ class Reimport(unittest.TestCase):
             write(os.path.join(mine, 'notes.txt'), 'mine')
             packs = os.path.join(d, 'packs')
             os.makedirs(packs)
-            os.symlink(mine, os.path.join(packs, 'kzm'))
+            make_symlink(mine, os.path.join(packs, 'kzm'))
             with self.assertRaisesRegex(InputError, 'is a link to .* which is not Kazumi Mishima\'s pack'):
                 pack.write(packs, KAZUMI, {'.nud': b'new'}, 0)
             self.assertEqual(sorted(os.listdir(mine)), ['dnc', 'notes.txt'])
@@ -230,7 +230,7 @@ class Reimport(unittest.TestCase):
             os.remove(os.path.join(packs, 'kzm'))
             empty = os.path.join(d, 'empty')
             os.makedirs(empty)
-            os.symlink(empty, os.path.join(packs, 'kzm'))           # (an empty folder: the pack goes there)
+            make_symlink(empty, os.path.join(packs, 'kzm'))           # (an empty folder: the pack goes there)
             pack.write(packs, KAZUMI, {'.nud': b'new'}, 0)
             self.assertEqual(files_in(empty), ['character.ini', 'kzm.nud'])
 
@@ -296,7 +296,7 @@ class Reimport(unittest.TestCase):
             old_kazumi(elsewhere)
             packs = os.path.join(d, 'packs')
             os.makedirs(packs)
-            os.symlink(os.path.join(elsewhere, 'kzm'), os.path.join(packs, 'kzm'))
+            make_symlink(os.path.join(elsewhere, 'kzm'), os.path.join(packs, 'kzm'))
             pack.write(packs, KAZUMI, {'.nud': b'new'}, 0)
             self.assertTrue(os.path.islink(os.path.join(packs, 'kzm')))
             self.assertEqual(files_in(os.path.join(elsewhere, 'kzm')), ['character.ini', 'kzm.nud'])
@@ -329,13 +329,13 @@ class Shared(unittest.TestCase):
             write(os.path.join(elsewhere, 'keys', '00000001.bin'), 'old')
             packs = os.path.join(d, 'packs')
             os.makedirs(packs)
-            os.symlink(elsewhere, os.path.join(packs, pack.SHARED))
+            make_symlink(elsewhere, os.path.join(packs, pack.SHARED))
             for _ in range(3):
                 self.build(packs, [(0, KAZUMI, None)])
                 self.assertEqual(sorted(os.listdir(packs)), [pack.SHARED])
                 self.assertFalse(os.path.islink(os.path.join(packs, pack.SHARED)))
             self.assertEqual(files_in(elsewhere), ['keys/00000001.bin'])
-            os.symlink(elsewhere, os.path.join(packs, pack.SHARED + '.old'))     # (left by an older build)
+            make_symlink(elsewhere, os.path.join(packs, pack.SHARED + '.old'))     # (left by an older build)
             self.build(packs, [])
             self.assertEqual(os.listdir(packs), [])
             self.assertEqual(files_in(elsewhere), ['keys/00000001.bin'])
@@ -426,7 +426,7 @@ class NoShared(unittest.TestCase):
         made = []
         scratch = os.path.join(folder, '.scratch')
         args = mock.Mock(tekken7='t7', tekken8=None, movesets=os.path.join(scratch, 'movesets'),
-                         files=os.path.join(scratch, 'files'), game='g', out=folder, no_shared=True)
+                         files=os.path.join(scratch, 'files'), game='g', out=folder, no_shared=True, outfits=set())
         with mock.patch.object(import_character, 'needs_packages'), \
                 mock.patch.object(autodump, 'dump', side_effect=AssertionError('Tekken 7 would run')), \
                 mock.patch.object(autodump, 'unowned', return_value={}), \
@@ -459,3 +459,12 @@ class NoShared(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def make_symlink(source, destination):
+    try:
+        os.symlink(source, destination, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, 'winerror', None) == 1314:
+            raise unittest.SkipTest('Windows account cannot create symbolic links')
+        raise

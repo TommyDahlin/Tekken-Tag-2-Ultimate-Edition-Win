@@ -55,8 +55,9 @@ void set_save_root(const std::filesystem::path& root);
 bool set_archive_entries(const std::string& archive, const std::map<uint32_t, std::vector<uint8_t>>& stored);
 
 // Calls `reader` with the name hash of each archive entry the title reads
-// (by where it reads in a dataNNN.bin), from the reading thread; for test
-// scripts that wait for a screen (TTT2_INPUT_SCRIPT's anchors).
+// (by where it reads in a dataNNN.bin), from the reading thread: to see a
+// screen open by the files it loads (TTT2_INPUT_SCRIPT's anchors, the VS
+// screens' player entry). Readers add up.
 void watch_entry_reads(std::function<void(uint32_t)> reader);
 
 std::optional<std::vector<uint8_t>> read_whole(std::string_view path);

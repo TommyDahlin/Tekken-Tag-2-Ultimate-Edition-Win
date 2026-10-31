@@ -5,9 +5,11 @@
 /portable/
 __pycache__/
 *.pyc
-# launcher/appimage/make_appimage.sh's output
+# launcher/appimage/make_appimage.sh's and launcher/windows/make_launcher_exe.py's output
 *.AppImage
 *.bat
+Ultimate_Launcher*.exe
+
 # The game and anything taken or generated from it stay out of the repository.
 *.wua
 *.wud
@@ -53,3 +55,5 @@ character.ini
 **/ttt2/tekken7/
 colours.json
 *.add
+# Local source backups used during Windows development.
+/work/

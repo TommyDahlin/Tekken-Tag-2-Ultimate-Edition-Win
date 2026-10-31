@@ -20,9 +20,15 @@
 // Packs are read from $TTT2_CHARACTERS, else
 // $XDG_DATA_HOME/ttt2/characters (~/.local/share/ttt2/characters).
 
+#include <cstdint>
+
 namespace cafe::title {
 
 // After vfs::open_game and the image load, before the title runs.
 void prepare_roster();
+
+// The added fighter (its number: its pack's slot) a fighter (a player
+// struct) is, or -1.
+int added_slot(uint32_t player);
 
 } // namespace cafe::title

@@ -840,7 +840,7 @@ def convert(source, archives, d, slot=0, log=print, standing=None):
             if rgb is None:
                 raise ValueError('material %s has no colour texture' % name)
             if kind == 'skin':                   # TTT2's skin colours (skin.py)
-                rgb = skin.hue(np.clip(rgb * skin_gain, 0, 1), skin_hue)
+                rgb = skin.hue(skin.gained(rgb, skin_gain), skin_hue)
             elif name in gains or kind in gains:  # (a definition's GAIN)
                 rgb = np.clip(rgb * gains.get(name, gains.get(kind)), 0, 1)
             built[name] = albedo_image(rgb, al), eff['textures'].get('Normal') if use_normal else None

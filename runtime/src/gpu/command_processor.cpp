@@ -98,7 +98,7 @@ struct ConvertDepthArgs { gx2::DepthBuffer src; gx2::Surface dst; uint32_t level
 struct CopyToScanArgs { gx2::ColorBuffer buffer; uint32_t target; };
 
 struct FrameLog {
-    bool enabled = false;  // the backend interpolates
+    bool enabled = false;  // the backend replays frames (interpolation, a view from another camera)
     bool complete = false; // started at a swap
     std::unique_ptr<Registers> start;
     std::vector<LogEvent> events;
@@ -446,9 +446,12 @@ void execute_packet(uint32_t opcode, uint32_t payload, uint32_t count, uint32_t 
             if (g_log.complete && g_backend->want_replays()) {
                 for (uint32_t n = 1; n < g_backend->frames_per_frame(); ++n) replay_frame(n);
             }
+            if (g_log.complete && g_backend->want_view_replay()) replay_frame(0);
             g_backend->frame_shown();
-            start_frame_log();
         }
+        g_log.enabled = g_backend->logs_frames();
+        if (g_log.enabled) start_frame_log();
+        else g_log.complete = false;
         retire_later({Retirement::kFrame, g_backend->flush(), 0, 0});
         break;
     case pm4::kHleCopyColorToScan:

@@ -86,6 +86,26 @@ class Rig(unittest.TestCase):
         self.assertTrue(np.all(cloth_w[sim >= 30] > 0.99))                     # the skirt below hangs on chains
         self.assertTrue(np.all((s['weights'] > 0).sum(1) <= 8))
 
+    def test_a_cloths_own_spring_and_body_parent(self):
+        k, drawn = model(self.asset)
+        k['bones'] = dict(names=['BASE', 'Hip', 'OPT1_bustL'], parents=[-1, 0, 1],
+                          world=np.concatenate([k['bones']['world'], k['bones']['world'][1:]]))
+        k['prims'][0]['joints'][:, 0] = 2                                  # (skinned to a bone the game swings)
+        own = dict(flags=0x60, parameters=(20.0, 70.0, 40.0), limits=(1.0, -1.0, 1.5, -1.5), last=0.2)
+        made = cloth.rig(k, [dict(part='bdu', asset=self.asset, vertices=drawn, name='skirt', spring=own)],
+                         log=lambda s: None)
+        self.assertEqual({c['parent'] for c in made}, {2})
+        self.assertTrue(all(c['spring'] is own for c in made))
+        k, drawn = model(self.asset)
+        k['bones'] = dict(names=['BASE', 'Hip', 'OPT1_bustL'], parents=[-1, 0, 1],
+                          world=np.concatenate([k['bones']['world'], k['bones']['world'][1:]]))
+        k['prims'][0]['joints'][:, 0] = 2
+        made = cloth.rig(k, [dict(part='bdu', asset=self.asset, vertices=drawn, name='skirt', body_parent=True)],
+                         log=lambda s: None)
+        self.assertEqual({c['parent'] for c in made}, {1})                 # (Hip, not the bust)
+        self.assertNotIn('spring', made[0])
+        self.assertNotIn('spring', self.made[0])                          # (none of its own: Tekken 7's cloth)
+
     def test_spring_entries_pairs_and_links(self):
         names = ['cha:HARA_ROT1', 'cha:KOSHI_jnt', 'cha:HIZA_R_jnt', 'cha:HIZA_L_jnt']
         world = [np.eye(4) for _ in names]
@@ -179,6 +199,17 @@ class SpringFile(unittest.TestCase):
         np.testing.assert_allclose(struct.unpack_from('>4f', e[403], 20), (.05, -.05, cloth.OUTWARD,
                                                                           -cloth.DRAPED_INWARD), atol=1e-6)
         np.testing.assert_allclose(struct.unpack_from('>4f', e[400], 20), (.05, -.05, .2, -.04), atol=1e-6)
+
+    def test_a_chains_own_spring_entry(self):
+        own = dict(flags=0x60, parameters=(20.0, 70.0, 40.0), limits=(1.05, -1.05, 1.57, -1.57), last=0.2)
+        out = cloth.spring_file(mop([]), self.template(), dict(entries=[(400, 0, 80.0, own), (401, 1, 24.0, None)],
+                                                                capsules=[], pairs=[], links=[]))
+        entries = cloth.parse(out)[0]
+        e = struct.unpack('>I11fI', entries[0][:0x34])
+        np.testing.assert_allclose(e[1:12], (20, 70, 40, 80, 1.05, -1.05, 1.57, -1.57, 1, 1, 0.2), atol=1e-6)
+        self.assertEqual(e[12], 0x60)
+        self.assertEqual(entries[1], cloth.parse(cloth.spring_file(                        # (the other: Lars's)
+            mop([]), self.template(), dict(entries=[(401, 1, 24.0, None)], capsules=[], pairs=[], links=[])))[0][0])
 
     def test_hair_entries_keep_the_cloth_pairs_and_links(self):
         cl = cloth.spring_file(mop([]), self.template(), dict(entries=[(400, 0, 200.0, None), (401, 1, 200.0, None)],

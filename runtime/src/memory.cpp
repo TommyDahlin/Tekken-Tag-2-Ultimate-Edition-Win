@@ -1,6 +1,7 @@
 #include "cafe/runtime.h"
 
-#if defined(_WIN32)
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #else
@@ -8,12 +9,10 @@
 #endif
 
 #include <bitset>
-#include <memory>
-#include <mutex>
-#if !defined(_WIN32)
 #include <cerrno>
 #include <cstring>
-#endif
+#include <memory>
+#include <mutex>
 
 namespace cafe {
 namespace {
@@ -44,11 +43,10 @@ void reserve_guest_memory() {
     if (g_base != nullptr) {
         return;
     }
-#if defined(_WIN32)
-    void* p = VirtualAlloc(nullptr, static_cast<SIZE_T>(kGuestSpace + kGuard), MEM_RESERVE, PAGE_NOACCESS);
+#ifdef _WIN32
+    void* p = VirtualAlloc(nullptr, kGuestSpace + kGuard, MEM_RESERVE, PAGE_NOACCESS);
     if (p == nullptr) {
-        fatal("cannot reserve 4 GiB of address space for guest memory: Win32 error %lu",
-              static_cast<unsigned long>(GetLastError()));
+        fatal("cannot reserve guest memory: Windows error %lu", GetLastError());
     }
 #else
     void* p = mmap(nullptr, kGuestSpace + kGuard, PROT_NONE,
@@ -70,10 +68,10 @@ void commit_guest_memory(uint32_t address, uint32_t size) {
         fatal("guest commit 0x%08X+0x%X runs past 4 GiB", address, size);
     }
     std::lock_guard lock(g_commit_mutex);
-#if defined(_WIN32)
-    if (VirtualAlloc(g_base + begin, static_cast<SIZE_T>(end - begin), MEM_COMMIT, PAGE_READWRITE) == nullptr) {
-        fatal("cannot commit guest memory 0x%08X+0x%X: Win32 error %lu", address, size,
-              static_cast<unsigned long>(GetLastError()));
+#ifdef _WIN32
+    if (VirtualAlloc(g_base + begin, end - begin, MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+        fatal("cannot commit guest memory 0x%08X+0x%X: Windows error %lu",
+              address, size, GetLastError());
     }
 #else
     if (mprotect(g_base + begin, end - begin, PROT_READ | PROT_WRITE) != 0) {

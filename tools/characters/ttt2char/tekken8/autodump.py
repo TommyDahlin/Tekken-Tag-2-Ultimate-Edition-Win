@@ -452,6 +452,10 @@ class Helper(t7.Helper):
         t7.Helper.__init__(self, port, secret, timeout)
         self.s.settimeout(SOCKET_TIMEOUT)
 
+    def attach(self):
+        pid = getattr(self, 'target_pid', None)
+        return self._answer('attach %d' % pid if pid is not None else 'attach')
+
     def _copy(self, n, f):
         """Writes the next n bytes of the connection to f."""
         take = self.buf[:n]
@@ -545,7 +549,7 @@ def _lock_path(prefix):
         import tempfile
         folder = tempfile.gettempdir()
     name = hashlib.sha1(os.path.realpath(prefix).encode('utf-8', 'surrogateescape')).hexdigest()[:16]
-    return os.path.join(folder, 'ttt2-tekken8-%d-%s.lock' % (os.getuid(), name))
+    return os.path.join(folder, 'ttt2-tekken8-%d-%s.lock' % (getattr(os, 'getuid', lambda: 0)(), name))
 
 
 def _lock(path, timeout=300):
@@ -885,7 +889,7 @@ def dump(fighters, out=None, log=print, cache=None, references=(), force=False):
         common = common and any(fid not in skipped for fid in whole)
         if not todo and not common:
             return saved, skipped
-    log('Starting Tekken 8 in the background (no window, no sound) ...')
+    log('Starting native Windows Tekken 8 (its window may appear) ...' if os.name == 'nt' else 'Starting Tekken 8 in the background (no window, no sound) ...')
     started = time.time()
     pending = {}                    # {roster id: (files, the files beside)}: saved whole, waiting for the shared bank
     s = Session(t8, helper_exe, run, True)
@@ -948,3 +952,10 @@ def dump(fighters, out=None, log=print, cache=None, references=(), force=False):
         s.close()
     log('Done in %.0f s.' % (time.time() - started))
     return saved, skipped
+
+
+if os.name == 'nt':
+    from .. import paths as _windows_paths
+    MOVESETS = os.path.join(_windows_paths.data_root(), 'tekken8', 'movesets')
+    CACHE = os.path.join(_windows_paths.data_root(), 'cache', 'tekken8')
+    from .windows import Session, build_helper, find_tekken8, owned_dlc, tekken8_running

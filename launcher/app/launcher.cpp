@@ -48,6 +48,7 @@ Launcher::Launcher(GtkApplication* app, Options options) : app_(app), options_(s
     importer_ = find_importer(here, TTT2_LAUNCHER_SOURCE_IMPORTER);
     python_ = find_python(here);
     kit_version_ = kit_version(kit_);
+    build_commit_ = *kBuildCommit ? kBuildCommit : build_commit(kit_version_);
     appimage_ = running_appimage(program_file(), std::getenv("APPIMAGE"), std::getenv("APPDIR"));
     chosen_game_ = options_.game;
     // Steam's last answer to which DLC is owned, until it is asked again.
@@ -78,6 +79,7 @@ Launcher::Launcher(GtkApplication* app, Options options) : app_(app), options_(s
     build_window();
     refresh();
     check_release();
+    check_main();
 }
 
 Launcher::~Launcher() {
@@ -245,7 +247,7 @@ void Launcher::check_again() {
 
 bool Launcher::busy() const {
     return task_ || status_loading_ || owned_state_ == Owned::kChecking || (preflight_ && preflight_->running) ||
-           release_checking_;
+           release_checking_ || main_checking_;
 }
 
 void Launcher::show_all() {
@@ -416,7 +418,10 @@ void Launcher::on_active(GObject* window, GParamSpec*, gpointer data) {
         return;
     }
     // (GitHub is asked again after hours, not each time.)
-    if (std::chrono::steady_clock::now() - self->release_time_ > std::chrono::hours(6)) self->check_release();
+    if (std::chrono::steady_clock::now() - self->release_time_ > std::chrono::hours(6)) {
+        self->check_release();
+        self->check_main();
+    }
     if (self->busy() || self->testing_) return;
     if (std::chrono::steady_clock::now() - self->status_time_ > std::chrono::seconds(5)) self->refresh();
 }
@@ -590,6 +595,14 @@ void Launcher::run_next_test() {
         const bool ok = widget && gtk_widget_grab_focus(widget);
         gtk_window_set_focus_visible(GTK_WINDOW(window_), TRUE); // (as after a key press: the picture shows it)
         test_done(ok, ok ? "" : "no " + a.args[0] + " that can take the focus");
+    } else if (a.name == "toggle") {
+        GtkWidget* widget = ui::find_id(window_, a.args[0]);
+        const bool ok = widget && GTK_IS_CHECK_BUTTON(widget) && gtk_widget_is_sensitive(widget);
+        if (ok) {
+            GtkCheckButton* box = GTK_CHECK_BUTTON(widget);
+            gtk_check_button_set_active(box, !gtk_check_button_get_active(box));
+        }
+        test_done(ok, ok ? "" : "no check box " + a.args[0] + " that can be clicked");
     } else if (a.name == "refresh") {
         check_again();
         // (Once all it starts has ended: which widget has the focus then.)

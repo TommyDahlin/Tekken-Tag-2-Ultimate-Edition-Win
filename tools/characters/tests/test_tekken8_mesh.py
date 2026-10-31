@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 import test_tekken8_synth as synth                    # noqa: E402
 from ttt2char.convert import skeleton                  # noqa: E402
+from ttt2char.tekken7 import mesh as t7mesh            # noqa: E402
 from ttt2char.tekken8 import cityhash, mesh, model, names, reflect, zen   # noqa: E402
 
 SKMESH = '/Script/Engine.SkeletalMesh'
@@ -263,6 +264,54 @@ class Loading(unittest.TestCase):
         self.assertEqual(p['joints'][1, :2].tolist(), [1, 4])
         self.assertEqual(sorted(k['parts']), ['bdf'])
         self.assertEqual(k['parts']['bdf']['source_names'][1], 'Hip')
+
+
+class Rebind(unittest.TestCase):
+    """A part bound to another rig than the first part's (Azucena's body: a rig of her own proportions, her face the
+    standard one) is moved onto it, so the skeletons merge by name."""
+
+    @staticmethod
+    def rig(hip, arm, top, turn=0.0, extra=False):
+        def pose(t, deg=0.0):
+            m = np.eye(4)
+            a = np.radians(deg)
+            m[:3, :3] = [[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]]
+            m[:3, 3] = t
+            return t7mesh.matrix_to_pose(m)
+        rows = [('Root', -1, (0, 0, 0), 0.0), ('Hip', 0, (0, 0, hip), turn), ('L_Arm', 1, (arm, 0, 0), -turn),
+                ('Top', 0, (0, 0, top), 0.0)] + ([('Hip_cloth', 1, (0, 5, 0), 0.0)] if extra else [])
+        return {'names': [r[0] for r in rows], 'parents': [r[1] for r in rows],
+                'pose': np.array([pose(r[2], r[3]) for r in rows], np.float32)}
+
+    @staticmethod
+    def geo():
+        return {'positions': np.array([[0, 0, 100], [50, 0, 100], [0, 5, 100]], np.float32),
+                'normals': np.array([[0, 1, 0]] * 3, np.float32),
+                'tangents': np.array([[1, 0, 0, -1]] * 3, np.float32),
+                'joints': np.array([[1, 0], [2, 0], [4, 0]]), 'weights': np.array([[1.0, 0], [1, 0], [1, 0]])}
+
+    def test_the_same_rig_stays(self):
+        ref, geo = self.rig(100, 50, 160), self.geo()
+        sk, out = model.rebind(self.rig(100, 50, 400, extra=True), geo, ref)                  # (an unweighted joint differs)
+        self.assertIs(out, geo)
+
+    def test_moved_onto_the_first_rig(self):
+        ref, part = self.rig(97, 51, 160), self.rig(100, 50, 400, extra=True)
+        sk, out = model.rebind(part, self.geo(), ref)
+        np.testing.assert_allclose(out['positions'][0], [0, 0, 97], atol=1e-4)     # with the hip
+        np.testing.assert_allclose(out['positions'][1], [51, 0, 97], atol=1e-4)    # with the arm
+        np.testing.assert_allclose(out['positions'][2], [0, 5, 97], atol=1e-4)     # a joint the first rig lacks
+        g = t7mesh.global_matrices(sk['pose'], sk['parents'])
+        rg = t7mesh.global_matrices(ref['pose'], ref['parents'])
+        np.testing.assert_allclose(g[:4], rg, atol=1e-4)                           # its rig: the first's (Top too)
+        np.testing.assert_allclose(g[4][:3, 3], [0, 5, 97], atol=1e-4)             # (kept under its parent)
+
+    def test_normals_turn(self):
+        ref, part = self.rig(100, 50, 160, turn=90.0), self.rig(100, 50, 160, extra=True)
+        sk, out = model.rebind(part, self.geo(), ref)
+        np.testing.assert_allclose(out['normals'][0], [-1, 0, 0], atol=1e-5)
+        np.testing.assert_allclose(out['tangents'][0], [0, 1, 0, -1], atol=1e-5)  # (the bitangent sign kept)
+        np.testing.assert_allclose(out['normals'][1], [0, 1, 0], atol=1e-5)       # the arm turned back
 
 
 # ------------------------------------------------------------------------------------------------ repose

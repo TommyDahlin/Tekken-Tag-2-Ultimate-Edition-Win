@@ -41,6 +41,11 @@ struct Fighter {
     // own could not be saved when they were added. `update` tells whether
     // their own can be had now. (Only with `added()`.)
     bool stand_in = false;
+    // How many outfits adding them can make (import_character.py
+    // --outfits), 0 for none.
+    int outfits = 0;
+    // Their pack in the game has its outfits. (Only with `added()`.)
+    bool outfits_added = false;
 
     // In the game: a pack it loads.
     bool added() const { return installed && !outdated && !newer; }
@@ -91,6 +96,23 @@ struct Ownership {
 };
 
 Ownership parse_owned(std::string_view json);
+
+// launcher.py main: what the repository's main branch has that the launcher's
+// build lacks (GitHub's comparison of the build's commit with main), so that
+// newer changes are shown before a release brings them. `error` when GitHub
+// could not be asked or does not know the commit (then nothing is shown).
+struct MainNews {
+    int ahead = 0;                     // main's commits the build lacks
+    std::string head, page;            // main's commit, and GitHub's page comparing them
+    std::vector<std::string> changes;  // the newest commits' titles, newest first
+    std::vector<std::string> fighters; // fighters main gives a newer pack revision
+    std::vector<std::pair<std::string, std::string>> fresh; // fighters only main has: the name, as shown
+    std::string error;
+};
+
+MainNews parse_main_news(std::string_view json);
+// The commit a kit's VERSION names ("0.4.0-1cab8c68f39b"), empty when none.
+std::string build_commit(std::string_view kit_version);
 
 // Steam's last answer, kept (Places::owned_cache) so that the next start
 // shows it at once: Steam's first answer after a boot takes most of a

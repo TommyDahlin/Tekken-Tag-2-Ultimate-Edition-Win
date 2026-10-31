@@ -116,6 +116,11 @@ target_compile_definitions(ttt2-launcher PRIVATE
     TTT2_LAUNCHER_SOURCE_IMPORTER="${source_importer}"
     TTT2_LAUNCHER_SOURCE_ICON="${source_icon}")
 set_target_properties(ttt2-launcher PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/launcher)
+# This build's commit (launcher/builder reads it; empty without Git), in a file of its own: a new commit
+# compiles only that file again.
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/build_commit.cpp @ONLY CONTENT
+    "namespace launcher { extern const char* const kBuildCommit;\nconst char* const kBuildCommit = \"@TTT2_LAUNCHER_COMMIT@\"; }\n")
+target_sources(ttt2-launcher PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/build_commit.cpp)
 
 install(TARGETS ttt2-launcher RUNTIME DESTINATION bin)
 install(FILES ${TTT2_LAUNCHER_APP_ID}.desktop DESTINATION share/applications)

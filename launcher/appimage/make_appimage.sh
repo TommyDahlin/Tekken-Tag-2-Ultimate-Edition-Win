@@ -135,7 +135,7 @@ unexpected() {
             ./usr/share/ttt2/characters/*.py) ;;
             ./usr/share/ttt2/characters/t7helper/t7helper.c | ./usr/share/ttt2/characters/t8helper/t8helper.c) ;;
             # (the importer's C parts, compiled on the player's PC for Tekken 8's import: ttt2char/native.py)
-            ./usr/share/ttt2/characters/ttt2char/tekken8/oodle.c) ;;
+            ./usr/share/ttt2/characters/ttt2char/tekken8/oodle.c | ./usr/share/ttt2/characters/ttt2char/tekken8/oodle_windows.h) ;;
             ./usr/share/ttt2/characters/ttt2char/convert/decimate.c) ;;
             "./usr/share/applications/$app_id.desktop") ;;
             "./usr/share/icons/hicolor/scalable/apps/$app_id.svg") ;;
@@ -187,10 +187,31 @@ done)
 newest() { # FILE NAME: the newest NAME_ version FILE needs
     readelf -V "$1" | sed -n "s/.*Name: $2_\([0-9.]*\).*/\1/p" | sort -V | tail -n 1
 }
+# kit_check is linked here, against this system's glibc; the game is linked on
+# the players' PCs, against theirs. A function glibc gave a new default version
+# since (atan2f: 2.43, beside its 2.2.5 one) is bound to that version here and
+# to its older one there, so only what has no version up to the limit counts:
+# a function older glibcs lack, or a name the headers rename (C23's
+# __isoc23_strtol).
+newest_glibc_linked_here() { # FILE LIMIT: the newest such GLIBC_ version FILE needs
+    local libs name version oldest
+    libs=$(ldd "$1" | sed -n 's/^.* => \(\/[^ ]*\) (.*$/\1/p')
+    objdump -T "$1" | sed -n 's/.*\*UND\*.*(GLIBC_\([0-9.]*\)) *\([^ ]*\)$/\2 \1/p' | while read -r name version; do
+        [ "$(printf '%s\n' "$version" "$2" | sort -V | tail -n 1)" = "$2" ] && continue
+        # shellcheck disable=SC2086
+        oldest=$(objdump -T $libs 2>/dev/null | awk -v n="$name" '$NF == n && $0 !~ /\*UND\*/ {
+            v = $(NF - 1); gsub(/[()]/, "", v); if (v ~ /^GLIBC_/) print substr(v, 7) }' | sort -V | head -n 1)
+        if [ -z "$oldest" ] || [ "$(printf '%s\n' "$oldest" "$2" | sort -V | tail -n 1)" != "$2" ]; then echo "$version"; fi
+    done | sort -V | tail -n 1
+}
 for program in "$appdir/usr/bin/ttt2-launcher" "$appdir/usr/lib/ttt2/kit/bin/ttt2-build" \
     "$appdir/usr/lib/ttt2/kit/bin/cafe-recomp" "$build/launcher/builder/kit_check"; do
     for limit in GLIBC_2.39 GLIBCXX_3.4.33; do
-        need=$(newest "$program" "${limit%_*}")
+        if [ "${program##*/}" = kit_check ] && [ "${limit%_*}" = GLIBC ]; then
+            need=$(newest_glibc_linked_here "$program" "${limit##*_}")
+        else
+            need=$(newest "$program" "${limit%_*}")
+        fi
         if [ -n "$need" ] && [ "$(printf '%s\n' "$need" "${limit##*_}" | sort -V | tail -n 1)" != "${limit##*_}" ]; then
             die "${program##*/} needs ${limit%_*}_$need: the oldest distributions it is for have $limit"
         fi

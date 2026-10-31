@@ -151,7 +151,7 @@ bool Launcher::addable(const Fighter& f) const {
     // DLC fighter's import asks Steam whether the DLC is owned, every time.
     // An older importer's pack is replaced, also one to update, a newer
     // one's never.)
-    if ((f.added() && !f.update) || f.newer || owns(f) != true || !status_) return false;
+    if ((f.added() && !f.update && !outfits_changed(f)) || f.newer || owns(f) != true || !status_) return false;
     if (f.dlc != 0) return status_->steam_running;
     if (f.of(kTekken8)) {
         // Their moves not saved yet are saved first, with Tekken 8 running
@@ -198,7 +198,7 @@ std::vector<std::string> Launcher::base_to_add(const std::string& game) const {
     std::vector<std::string> names;
     if (status_) {
         for (const Fighter& f : status_->fighters) {
-            if (f.of(game) && f.dlc == 0 && !f.update && addable(f)) names.push_back(f.name);
+            if (f.of(game) && f.dlc == 0 && !f.added() && addable(f)) names.push_back(f.name);
         }
     }
     return names;
@@ -208,7 +208,7 @@ std::vector<std::string> Launcher::owned_to_add() const {
     std::vector<std::string> names;
     if (status_) {
         for (const Fighter& f : status_->fighters) {
-            if (f.of(kTekken7) && f.dlc != 0 && !f.update && addable(f)) names.push_back(f.name);
+            if (f.of(kTekken7) && f.dlc != 0 && !f.added() && addable(f)) names.push_back(f.name);
         }
     }
     return names;
@@ -239,6 +239,43 @@ std::vector<std::string> Launcher::to_remove_all(const std::string& game) const 
     return names;
 }
 
+bool Launcher::wants_outfits(const Fighter& f) const {
+    if (f.outfits == 0) return false;
+    const auto it = outfits_.find(f.name);
+    return it != outfits_.end() ? it->second : f.outfits_added;
+}
+
+// (Not a newer version's pack, which this importer leaves alone, nor a DLC
+// not owned.)
+static bool outfits_choosable(const Fighter& f, std::optional<bool> owned) {
+    return f.outfits > 0 && owned != false && !f.newer;
+}
+
+std::vector<const Fighter*> Launcher::outfit_choices() const {
+    std::vector<const Fighter*> out;
+    if (status_) {
+        for (const Fighter& f : status_->fighters) {
+            if (outfits_choosable(f, owns(f))) out.push_back(&f);
+        }
+    }
+    return out;
+}
+
+bool Launcher::outfits_changed(const Fighter& f) const {
+    // (One to update anyway is updated with their box as it is.)
+    return f.added() && !f.update && outfits_choosable(f, owns(f)) && wants_outfits(f) != f.outfits_added;
+}
+
+std::vector<std::string> Launcher::outfits_to_change() const {
+    std::vector<std::string> names;
+    if (status_) {
+        for (const Fighter& f : status_->fighters) {
+            if (outfits_changed(f) && addable(f)) names.push_back(f.name);
+        }
+    }
+    return names;
+}
+
 // ---------------------------------------------------------------- the section
 
 GtkWidget* Launcher::fighter_row(const Fighter& f, bool usable) {
@@ -247,13 +284,48 @@ GtkWidget* Launcher::fighter_row(const Fighter& f, bool usable) {
     // columns.
     GtkWidget* row = ui::box(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget* name = ui::label(f.display, nullptr, false);
-    gtk_widget_set_hexpand(name, TRUE);
+    gtk_widget_set_size_request(name, 170, -1); // (the outfits' boxes in a column after it)
     gtk_box_append(GTK_BOX(row), name);
+    const std::optional<bool> owned = owns(f);
+    // Their outfits: whether adding them makes theirs, or (in the game with
+    // nothing to add) whether their pack has them.
+    const bool choosable = outfits_choosable(f, owned);
+    GtkWidget* outfits = nullptr;
+    if (choosable || (f.outfits > 0 && f.added())) {
+        outfits = gtk_check_button_new_with_label("Outfits");
+        ui::set_id(outfits, "outfits:" + f.name);
+        gtk_check_button_set_active(GTK_CHECK_BUTTON(outfits), choosable ? wants_outfits(f) : f.outfits_added);
+        gtk_widget_set_sensitive(outfits, choosable && !task_);
+        const std::string count = std::to_string(f.outfits);
+        const std::string tip = !f.added() || f.update
+                                    ? "Also make their " + count +
+                                          " outfits for the costume chooser: adding them takes much longer"
+                                : !choosable      ? (f.outfits_added ? "Their pack has their outfits"
+                                                                     : "Their pack has no outfits")
+                                : f.outfits_added ? "Their pack has their outfits: untick, then Update, to remove them"
+                                                  : "Tick, then Update, to add their " + count +
+                                                        " outfits (it takes much longer)";
+        gtk_widget_set_tooltip_text(outfits, tip.c_str());
+        g_object_set_data_full(G_OBJECT(outfits), "fighter", g_strdup(f.name.c_str()), g_free);
+        g_signal_connect(outfits, "toggled", G_CALLBACK(+[](GtkCheckButton* b, gpointer data) {
+                             auto* self = static_cast<Launcher*>(data);
+                             self->outfits_[static_cast<const char*>(g_object_get_data(G_OBJECT(b), "fighter"))] =
+                                 gtk_check_button_get_active(b);
+                             self->show_characters();
+                         }),
+                         this);
+    } else {
+        outfits = ui::box(GTK_ORIENTATION_HORIZONTAL, 0); // (keeps the columns)
+    }
+    gtk_widget_set_size_request(outfits, 84, -1);
+    gtk_widget_set_valign(outfits, GTK_ALIGN_CENTER);
+    gtk_widget_set_hexpand(outfits, TRUE);
+    gtk_widget_set_halign(outfits, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(row), outfits);
     GtkWidget* state = ui::box(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_size_request(state, 96, -1);
     gtk_widget_set_halign(state, GTK_ALIGN_END);
     gtk_box_append(GTK_BOX(row), state);
-    const std::optional<bool> owned = owns(f);
     GtkWidget* state_label = nullptr;
     if (f.outdated) {
         state_label = ui::label("Older version", "pill warn", false);
@@ -270,9 +342,16 @@ GtkWidget* Launcher::fighter_row(const Fighter& f, bool usable) {
                                                   "own."
                                                 : "Made by an older version: they are in the game, and updating them "
                                                   "gives them what this version adds.");
+    } else if (outfits_changed(f)) {
+        state_label = ui::label(f.outfits_added ? "Outfits to remove" : "Outfits to add", "pill warn", false);
+        ui::set_tooltip(state_label, f.outfits_added ? "Update them to remove their outfits."
+                                                     : "Update them to add their outfits.");
     } else if (f.stand_in) {
         state_label = ui::label("Heihachi's moves", "pill neutral", false);
         ui::set_tooltip(state_label, "They fight with Heihachi's moves until their own can be saved (see above).");
+    } else if (f.added() && newer_on_main(f.name)) {
+        state_label = ui::label("Newer on main", "pill neutral", false);
+        ui::set_tooltip(state_label, "Main has an update for them: it comes with the next release.");
     } else if (f.installed) {
         state_label = ui::label("Added", "pill ok", false);
     } else if (f.dlc != 0 && owned) {
@@ -321,12 +400,12 @@ GtkWidget* Launcher::fighter_row(const Fighter& f, bool usable) {
                          this);
         append(button);
     };
-    if (f.outdated || f.update) {
+    if (f.outdated || f.update || outfits_changed(f)) {
         // (Adding them again replaces the old pack: the main button. A DLC
         // no longer owned cannot be added again, and says so there.)
         remove_button("remove:" + f.name);
         if (owned != false) {
-            add_button(f.update ? "Update" : "Add Again");
+            add_button(f.outdated ? "Add Again" : "Update");
         } else {
             GtkWidget* note = ui::label("Not owned", "small dim", false);
             gtk_label_set_xalign(GTK_LABEL(note), 0.5f);
@@ -494,6 +573,17 @@ void Launcher::show_characters() {
         gtk_grid_attach(GTK_GRID(facts), needed, 1, row, 1, 1);
     }
     gtk_box_append(GTK_BOX(card), facts);
+    if (main_news_ && !main_news_->fresh.empty()) {
+        const auto& fresh = main_news_->fresh;
+        std::string names;
+        for (size_t i = 0; i < fresh.size(); ++i) {
+            names += (i == 0 ? "" : i + 1 == fresh.size() ? " and " : ", ") + fresh[i].second;
+        }
+        note_line(card, "dialog-information-symbolic", "Main adds " + names + ": they come with the next release.",
+                  false);
+    }
+
+    outfits_line(card);
 
     // Each game's characters: the one installed first.
     if (!s.tekken7_found && s.tekken8_found) {
@@ -503,6 +593,65 @@ void Launcher::show_characters() {
         game_section(card, kTekken7);
         game_section(card, kTekken8);
     }
+}
+
+void Launcher::outfits_line(GtkWidget* card) {
+    // One box for every character's outfits (their own boxes are in their
+    // rows), and what choosing them costs.
+    const auto choices = outfit_choices();
+    if (choices.empty()) return;
+    // (making: ticked where an import makes them: not a pack in the game
+    // that has them already, with nothing to update.)
+    size_t wanted = 0, making = 0;
+    std::vector<const Fighter*> changed;
+    for (const Fighter* f : choices) {
+        wanted += wants_outfits(*f);
+        making += wants_outfits(*f) && (!f->added() || f->update || !f->outfits_added);
+        if (outfits_changed(*f)) changed.push_back(f);
+    }
+    GtkWidget* every = gtk_check_button_new_with_label("Import outfits for every character");
+    ui::set_id(every, "outfits-all");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(every), wanted == choices.size());
+    gtk_check_button_set_inconsistent(GTK_CHECK_BUTTON(every), wanted > 0 && wanted < choices.size());
+    gtk_widget_set_sensitive(every, !task_);
+    gtk_widget_set_tooltip_text(every, "Outfits are complete bodies for the in-game costume chooser. Without them, a "
+                                       "character has their default costume.");
+    gtk_widget_set_margin_top(every, 4);
+    g_signal_connect(every, "toggled", G_CALLBACK(+[](GtkCheckButton*, gpointer data) {
+                         // (Some or none chosen: all; all: none.)
+                         auto* self = static_cast<Launcher*>(data);
+                         const auto choices = self->outfit_choices();
+                         bool all = true;
+                         for (const Fighter* f : choices) all = all && self->wants_outfits(*f);
+                         for (const Fighter* f : choices) self->outfits_[f->name] = !all;
+                         self->show_characters();
+                     }),
+                     this);
+    gtk_box_append(GTK_BOX(card), every);
+    if (making > 0) {
+        note_line(card, "dialog-warning-symbolic",
+                  "Importing outfits can drastically prolong adding and updating characters: each outfit is a "
+                  "complete extra body made from your Tekken 7's files.",
+                  true);
+    }
+    // Characters in the game whose box was changed: updating them all at once.
+    if (changed.empty()) return;
+    const std::string text =
+        changed.size() > 1 ? std::to_string(changed.size()) + " characters' outfits change when they are updated."
+        : changed[0]->outfits_added ? changed[0]->display + "'s outfits are removed when they are updated."
+                                    : changed[0]->display + "'s outfits are added when they are updated.";
+    GtkWidget* line = note_line(card, "ttt2-update-symbolic", text, true);
+    const auto names = outfits_to_change();
+    GtkWidget* update = ui::button(changed.size() == 1 ? "Update" : "Update All");
+    ui::set_id(update, "update-outfits");
+    gtk_widget_set_valign(update, GTK_ALIGN_CENTER);
+    gtk_widget_set_sensitive(update, can_import() && !task_ && !names.empty());
+    if (can_import() && names.empty()) {
+        const std::string why = not_addable_why(*changed[0]);
+        gtk_widget_set_tooltip_text(update, why.c_str());
+    }
+    clicked(update, [](Launcher* self) { self->start_import(self->outfits_to_change()); });
+    gtk_box_append(GTK_BOX(line), update);
 }
 
 void Launcher::game_section(GtkWidget* card, const std::string& game) {
@@ -776,14 +925,22 @@ void Launcher::start_import(const std::vector<std::string>& names) {
     if ((tekken7 && !game_usable(kTekken7, &why)) || (tekken8 && !game_usable(kTekken8, &why))) {
         return refuse("Cannot add characters", why);
     }
+    // (Their outfits as their boxes say.)
+    std::string outfits;
+    for (const Fighter& f : status_->fighters) {
+        if (std::find(names.begin(), names.end(), f.name) != names.end() && wants_outfits(f)) {
+            outfits += (outfits.empty() ? "" : ",") + f.name;
+        }
+    }
     std::vector<std::string> argv = importer_command("import_character.py");
     argv.insert(argv.end(), names.begin(), names.end());
-    argv.insert(argv.end(), {"--game", install_.folder.string(), "--progress"});
+    argv.insert(argv.end(), {"--outfits", outfits.empty() ? "none" : outfits, "--game", install_.folder.string(),
+                             "--progress"});
     // (Characters to update only: an update. Their packs are replaced whole,
     // as the importer replaces any.)
     const bool update = !names.empty() && std::all_of(names.begin(), names.end(), [&](const std::string& name) {
         return std::any_of(status_->fighters.begin(), status_->fighters.end(),
-                           [&](const Fighter& f) { return f.name == name && f.update; });
+                           [&](const Fighter& f) { return f.name == name && (f.update || outfits_changed(f)); });
     });
     if (start_task(Kind::kImport, (update ? "Updating " : "Adding ") + names_text(status_, names), argv,
                    importer_environment(), nullptr)) {

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -101,6 +102,9 @@ std::atomic<Controller> g_controller{Controller::kOther};
 bool g_controller_fixed = false;
 bool g_controller_used = false; // a button or stick moved: added pads no longer count
 std::function<void(Controller)> g_controller_callback;
+// A device: the keyboard (0: SDL's gamepad ids never are) or a gamepad.
+constexpr SDL_JoystickID kKeyboard = 0;
+SDL_JoystickID g_last_used = kKeyboard; // the device with the latest input
 
 Controller kind_of(SDL_JoystickID id) {
     switch (SDL_GetGamepadTypeForID(id)) {
@@ -153,21 +157,27 @@ void set_controller(Controller kind) {
 void note_controller(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!g_controller_used) set_controller(kind_of(event.gdevice.which));
+        if (!g_controller_used) {
+            g_last_used = event.gdevice.which;
+            set_controller(kind_of(event.gdevice.which));
+        }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         g_controller_used = true;
+        g_last_used = event.gbutton.which;
         set_controller(kind_of(event.gbutton.which));
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         if (std::abs(event.gaxis.value) > 16000) {
             g_controller_used = true;
+            g_last_used = event.gaxis.which;
             set_controller(kind_of(event.gaxis.which));
         }
         break;
     case SDL_EVENT_KEY_DOWN:
         if (controller_keyboard(event.key.which)) break;
         g_controller_used = true;
+        g_last_used = kKeyboard;
         set_controller(Controller::kOther);
         break;
     default: break;
@@ -179,14 +189,149 @@ float axis(SDL_Gamepad* pad, SDL_GamepadAxis a) {
     return std::fabs(v) < 0.15f ? 0.0f : std::clamp(v, -1.0f, 1.0f);
 }
 
+// ------------------------------------------------------------ players
+
+// A device and what it holds.
+struct DeviceState {
+    SDL_JoystickID id;
+    os::GamepadState state;
+};
+
+std::function<bool(bool)> g_own_check;
+bool g_own = false;                                          // players have controllers of their own
+std::array<std::optional<SDL_JoystickID>, kControllers> g_owners; // the device that took each controller
+std::vector<SDL_JoystickID> g_plus_held;                     // devices holding + at the last update
+std::optional<std::array<std::optional<Device>, kControllers>> g_fixed_devices; // TTT2_DEVICES
+std::function<void()> g_devices_callback;
+std::mutex g_devices_mutex;
+std::array<std::optional<Device>, kControllers> g_devices{Device::kKeyboard};
+
+Device device_of(SDL_JoystickID id) {
+    if (id == kKeyboard) return Device::kKeyboard;
+    switch (kind_of(id)) {
+    case Controller::kPlayStation: return Device::kPlayStation;
+    case Controller::kNintendo: return Device::kNintendo;
+    case Controller::kOther: break;
+    }
+    return Device::kXbox;
+}
+
+// The devices on the title's controllers, for the pictures of them.
+void update_devices() {
+    std::array<std::optional<Device>, kControllers> devices{};
+    if (g_fixed_devices) {
+        devices = *g_fixed_devices;
+    } else {
+        devices[0] = device_of(g_owners[0].value_or(g_last_used));
+        for (size_t c = 1; c < kControllers; ++c) {
+            if (g_owners[c]) devices[c] = device_of(*g_owners[c]);
+        }
+    }
+    {
+        std::lock_guard lock(g_devices_mutex);
+        if (devices == g_devices) return;
+        g_devices = devices;
+    }
+    if (g_devices_callback) g_devices_callback();
+}
+
+void merge(os::GamepadState& into, const os::GamepadState& state) {
+    into.buttons |= state.buttons;
+    into.left_x = std::clamp(into.left_x + state.left_x, -1.0f, 1.0f);
+    into.left_y = std::clamp(into.left_y + state.left_y, -1.0f, 1.0f);
+    into.right_x = std::clamp(into.right_x + state.right_x, -1.0f, 1.0f);
+    into.right_y = std::clamp(into.right_y + state.right_y, -1.0f, 1.0f);
+}
+
+// A press of + by another device this soon after one took a controller
+// takes none: the same press, as a controller that shows as two devices
+// (Steam's virtual gamepad beside the one it stands for) gives it.
+constexpr auto kSamePress = std::chrono::milliseconds(100);
+std::chrono::steady_clock::time_point g_last_taken{};
+
+void trace_players(const char* what) {
+    static const bool trace = std::getenv("TTT2_TRACE_PLAYERS") != nullptr;
+    if (!trace) return;
+    std::string owners;
+    for (size_t c = 0; c < kControllers; ++c) {
+        owners += c ? ", " : "";
+        owners += g_owners[c] ? (*g_owners[c] == kKeyboard ? std::string("keyboard")
+                                                           : "gamepad " + std::to_string(*g_owners[c]))
+                              : std::string("-");
+    }
+    std::fprintf(stderr, "ttt2: players: %s (%s; GamePad, Pro Controllers: %s)\n", what,
+                 g_own ? "own controllers" : "all on the GamePad", owners.c_str());
+}
+
+// Who drives which of the title's controllers, from the devices' states.
+void assign(const std::vector<DeviceState>& devices) {
+    const bool joined = std::any_of(g_owners.begin(), g_owners.end(), [](const auto& o) { return o.has_value(); });
+    if (const bool own = g_own_check && g_own_check(joined); own != g_own) {
+        g_own = own;
+        g_owners = {};
+        trace_players(g_own ? "a mode for several players" : "a mode for one");
+    }
+    const auto present = [&](SDL_JoystickID id) {
+        return std::any_of(devices.begin(), devices.end(), [&](const DeviceState& d) { return d.id == id; });
+    };
+    for (auto& owner : g_owners) {
+        if (owner && !present(*owner)) {
+            owner.reset();
+            trace_players("a device left");
+        }
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<SDL_JoystickID> plus_held;
+    for (const DeviceState& d : devices) {
+        if (!(d.state.buttons & os::vpad::kPlus)) continue;
+        plus_held.push_back(d.id);
+        const bool pressed = std::find(g_plus_held.begin(), g_plus_held.end(), d.id) == g_plus_held.end();
+        if (!g_own || !pressed || std::find(g_owners.begin(), g_owners.end(), d.id) != g_owners.end()) continue;
+        const auto free = std::find(g_owners.begin(), g_owners.end(), std::nullopt);
+        if (free == g_owners.end() || now - g_last_taken < kSamePress) continue;
+        *free = d.id;
+        g_last_taken = now;
+        trace_players("a device joined");
+    }
+    g_plus_held = std::move(plus_held);
+
+    os::GamepadState gamepad{};
+    std::array<std::optional<os::GamepadState>, os::kProControllers> pro{};
+    for (const DeviceState& d : devices) {
+        const auto owned = std::find(g_owners.begin(), g_owners.end(), d.id);
+        if (owned == g_owners.begin()) {
+            gamepad = d.state;
+        } else if (owned != g_owners.end()) {
+            pro[static_cast<size_t>(owned - g_owners.begin()) - 1] = d.state;
+        } else if (!g_owners[0]) {
+            merge(gamepad, d.state);
+        }
+    }
+    // The title offers VS Battle and Pair Play only with another controller
+    // connected than the GamePad: each device beyond one keeps a Pro
+    // Controller connected, idle until a device takes it.
+    size_t connected = std::min(devices.size() - 1, size_t{os::kProControllers});
+    for (size_t c = 1; c < kControllers; ++c) {
+        if (g_owners[c]) connected = std::max(connected, c);
+    }
+    for (size_t c = 0; c < connected; ++c) {
+        if (!pro[c]) pro[c] = os::GamepadState{};
+    }
+    os::set_gamepad_state(gamepad);
+    os::set_pro_controller_states(pro);
+    update_devices();
+}
+
 void update_input() {
-    os::GamepadState state{};
+    std::vector<DeviceState> devices;
+    os::GamepadState keyboard{};
     for (size_t i = 0; i < keymap::kInputCount; ++i) {
         if (!g_keys[g_keymap[i]]) continue;
-        state.buttons |= keymap::kInputs[i].button;
-        state.left_x += keymap::kInputs[i].stick_x;
-        state.left_y += keymap::kInputs[i].stick_y;
+        keyboard.buttons |= keymap::kInputs[i].button;
+        keyboard.left_x += keymap::kInputs[i].stick_x;
+        keyboard.left_y += keymap::kInputs[i].stick_y;
     }
+    devices.push_back({kKeyboard, keyboard});
 
     int count = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&count);
@@ -194,18 +339,20 @@ void update_input() {
         SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i]);
         if (pad == nullptr) pad = SDL_OpenGamepad(ids[i]);
         if (pad == nullptr) continue;
+        os::GamepadState state{};
         for (const PadButton& b : kPadButtons) {
             if (SDL_GetGamepadButton(pad, b.button)) state.buttons |= b.vpad;
         }
         if (axis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 0.5f) state.buttons |= os::vpad::kZL;
         if (axis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.5f) state.buttons |= os::vpad::kZR;
-        state.left_x = std::clamp(state.left_x + axis(pad, SDL_GAMEPAD_AXIS_LEFTX), -1.0f, 1.0f);
-        state.left_y = std::clamp(state.left_y - axis(pad, SDL_GAMEPAD_AXIS_LEFTY), -1.0f, 1.0f);
-        state.right_x = std::clamp(state.right_x + axis(pad, SDL_GAMEPAD_AXIS_RIGHTX), -1.0f, 1.0f);
-        state.right_y = std::clamp(state.right_y - axis(pad, SDL_GAMEPAD_AXIS_RIGHTY), -1.0f, 1.0f);
+        state.left_x = axis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+        state.left_y = -axis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+        state.right_x = axis(pad, SDL_GAMEPAD_AXIS_RIGHTX);
+        state.right_y = -axis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+        devices.push_back({ids[i], state});
     }
     SDL_free(ids);
-    os::set_gamepad_state(state);
+    assign(devices);
 }
 
 void update_size() {
@@ -285,6 +432,35 @@ void on_controller_change(std::function<void(Controller)> callback) {
         g_controller_fixed = true;
     }
     if (g_controller_callback) g_controller_callback(g_controller);
+}
+
+void on_own_controllers(std::function<bool(bool)> check) { g_own_check = std::move(check); }
+
+std::array<std::optional<Device>, kControllers> controller_devices() {
+    std::lock_guard lock(g_devices_mutex);
+    return g_devices;
+}
+
+void on_controller_devices_change(std::function<void()> callback) {
+    g_devices_callback = std::move(callback);
+    if (const char* fixed = std::getenv("TTT2_DEVICES")) {
+        std::array<std::optional<Device>, kControllers> devices{};
+        const std::string list = fixed;
+        size_t c = 0;
+        for (size_t pos = 0; pos <= list.size() && c < kControllers; ++c) {
+            const size_t end = std::min(list.find(',', pos), list.size());
+            const std::string name = list.substr(pos, end - pos);
+            devices[c] = name == "playstation" ? Device::kPlayStation
+                         : name == "nintendo"  ? Device::kNintendo
+                         : name == "xbox"      ? Device::kXbox
+                                               : Device::kKeyboard;
+            pos = end + 1;
+        }
+        g_fixed_devices = devices;
+        std::lock_guard lock(g_devices_mutex);
+        g_devices = devices;
+    }
+    if (g_devices_callback) g_devices_callback();
 }
 
 bool run_event_loop(const std::function<bool()>& finished) {

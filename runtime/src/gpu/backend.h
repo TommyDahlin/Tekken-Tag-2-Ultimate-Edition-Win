@@ -83,6 +83,13 @@ public:
     virtual void begin_replay(uint32_t) {}
     virtual void end_replay() {}
     virtual void frame_shown() {}
+    // Whether the frame starting now is to be logged for replays (asked at
+    // each swap): for the extra frames, or for a view from another camera.
+    virtual bool logs_frames() { return frames_per_frame() > 1; }
+    // A view replay of the frame just swapped (begin_replay(0), after its
+    // extra frames): the frame rendered again from another camera, not
+    // shown as a frame of its own.
+    virtual bool want_view_replay() { return false; }
 };
 
 // Seconds the command processor waited for commands since the last call

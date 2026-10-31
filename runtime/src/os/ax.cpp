@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <numbers>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -560,7 +561,7 @@ void AXSetVoiceBiquadCoefs(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uin
 
 // One-pole low-pass coefficients for a cutoff frequency at 32 kHz.
 void AXComputeLpfCoefs(uint32_t frequency, be<uint16_t>* a0, be<uint16_t>* b0) {
-    const double b = 2.0 - std::cos(2.0 * M_PI * frequency / 32000.0);
+    const double b = 2.0 - std::cos(2.0 * std::numbers::pi * frequency / 32000.0);
     const double c = b - std::sqrt(b * b - 1.0);
     if (a0) *a0 = static_cast<uint16_t>((1.0 - c) * 32768.0);
     if (b0) *b0 = static_cast<uint16_t>(c * 32768.0);

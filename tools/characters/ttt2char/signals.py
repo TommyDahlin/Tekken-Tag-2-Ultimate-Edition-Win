@@ -11,14 +11,7 @@ not stop halfway: putting a pack's files in place, ending the hidden session.
 import contextlib
 import signal
 
-SIGNALS = tuple(
-    s for s in (
-        getattr(signal, 'SIGTERM', None),
-        getattr(signal, 'SIGHUP', None),
-        getattr(signal, 'SIGINT', None),
-    )
-    if s is not None
-)
+SIGNALS = tuple(getattr(signal, name) for name in ('SIGTERM', 'SIGHUP', 'SIGINT') if hasattr(signal, name))
 
 _state = {'stopping': None, 'deferred': 0, 'pending': None}
 

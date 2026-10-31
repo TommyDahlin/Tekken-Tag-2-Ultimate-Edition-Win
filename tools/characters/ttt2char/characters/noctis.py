@@ -9,6 +9,7 @@ NAME = 'Noctis'
 SHORT_NAME = 'NOCTIS'
 TEKKEN7_ID = 44
 TEKKEN7_CODE = 'mrz'
+REVISION = 5
 CODE = 'mrz'
 SEX = 'male'
 
@@ -83,10 +84,25 @@ VOICE_PREFIX = 'mz'
 # the id maps: Heihachi in both games, and his generic moves against TTT2's (Heihachi, the donor, Asuka)
 ALIGN = [('heihachi', 13), ('self', 13), ('heihachi', 14), ('self', DONOR_ROW), ('heihachi', 9), ('self', 23)]
 MOVESET = {
+    # df4,2,2: a private tip extends only the second/third-hit blade capsules.
+    # Include buffered second-hit variants; tagged third-hit twins inherit it.
+    # Second-hit wall coverage is an extra sphere, preserving the original
+    # extended blade capsule. The runtime supplies its point below the tip.
+    'hitboxes': {name: (0xfe, 0xfc, 0xfe, 9) for name in
+                 ('Mz_t_srk01F', 'Mz_t_srk01F_C', 'Mz_t_srk02Fy')} |
+                {'Mz_t_srk02F': (0xfe, 0, 0xfe, 9)},
+    'free_air_screws': ('Mz_s_trp01',),
+    # Only these finishers retain their T7 airborne slam instead of a rebound.
+    'source_air_reactions': ('Mz_t_srk02', 'Mz_t_srk02Easy'),
+    'air_hit_strings': ('Mz_jprp01', 'Mz_jprp01F', 'Mz_jprp02'),
+    'hitgrab_followups': ('Mz_rp00B',),
+    'on_hit_followups': {'Mz_9LK': 'Mz_9LK2'},
     'direct_buffered_strings': ('Mz_t_srk00F',),
-    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds, and Mz_jpWPF
-    'bounds': dict.fromkeys(('Mz_9RP', 'Mz_Shield2Atk', 'Mz_lk01B', 'Mz_rk01jpWPF', 'Mz_runWP', 'Mz_s_tlp01',
-                             'Mz_t_srk02Easy', 'Mz_t_srk02F', 'Mz_yokoRP', 'Mz_jpWPF'), True),
+    # bounds (convert/move_overrides.py): the moves the Tekken 7 Bound Mod makes bounds, and Mz_jpWPF; neutral 1+2
+    # (Mz_WP00) none (WS 2,2 screws without one: free_air_screws)
+    'bounds': {**dict.fromkeys(('Mz_9RP', 'Mz_Shield2Atk', 'Mz_lk01B', 'Mz_rk01jpWPF', 'Mz_runWP', 'Mz_s_tlp01',
+                                'Mz_t_srk02Easy', 'Mz_t_srk02F', 'Mz_yokoRP', 'Mz_jpWPF'), True),
+               **dict.fromkeys(('Mz_t_srp01', 'Mz_t_srk03F', 'Mz_WP00'), False)},
     'name': '[NOCTIS]',
     'drop_moves': r'^Mz_Direct$',
     'direct': [(r'^(la|mk)_s', 'anim', ['mz_s%02d' % k for k in range(5)]),     # the donor's intros -> his
@@ -103,7 +119,8 @@ MOVESET = {
 _WEAPONS_MESH = _ITEM + '/Meshes/mrz/Extra/mrz_exp_1p/Meshes/SK_CH_mrz_exp_1p'
 WEAPONS = [
     {'mesh': _WEAPONS_MESH, 'bone': 'ATH_R_weapon002', 'parent': 'TE_R_jnt', 'pair': 4, 'summon': 3, 'part': 9,
-     'points': {0x63: ('ATH_R_weapon002_top', 0), 0x66: ('ATH_R_weapon002_hilp', 1)}},
+     'points': {0x63: ('ATH_R_weapon002_top', 0), 0x66: ('ATH_R_weapon002_hilp', 1),
+                0xfe: ({'bone': 'ATH_R_weapon002_top', 'extend_cm': 30}, 3)}},
     {'mesh': _WEAPONS_MESH, 'bone': 'ATH_L_weapon002', 'parent': 'TE_L_jnt', 'pair': 1, 'summon': 2, 'part': 13,
      'points': {0x5f: ('ATH_L_weapon002_top', 2)}},
     {'mesh': _WEAPONS_MESH, 'bone': 'ATH_R_weapon001', 'parent': 'TE_R_jnt', 'pair': 3, 'summon': 1, 'part': 9,
@@ -128,4 +145,5 @@ VERTEX_BUDGET = 90000
 # there with particles of its mesh, which are left out); on guard it is gone at once, as in Tekken 7
 WEAPON_HOLD = r'^Mz_(rp01F|rush03C|t_slpF_RP|s_tlk01|WPF2_EX)_HIT$'
 # the Rage Art's and the Sword of the Father's weapons (not drawn) hit with the right hand's weapon's tip
-HIT_LOCATIONS = {0x67: 0x46, 0x69: 0x46}
+# 0xfc selects the spare point refreshed only during df4,2's second hit.
+HIT_LOCATIONS = {0x67: 0x46, 0x69: 0x46, 0xfc: 71}

@@ -1,4 +1,9 @@
 #include "title/roster.h"
+#include "title/eliza_assist.h"
+#include "title/noctis_assault.h"
+#include "title/noctis_hitbox.h"
+#include "title/damage_scaling.h"
+#include "title/gauge.h"
 #include "outfit_menu.h"
 
 #include "cafe/ppc_ops.h"
@@ -11,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -71,7 +77,11 @@ constexpr uint32_t kUiPosition = 59;           // an added fighter's records: af
 // * a select grid cell (62 + k, over the unused grid 2): the free ends of
 //   the top row (kCells: right of Eddy's column, then left, alternately),
 //   then columns beyond the grid's ends (the cursor's place is computed from
-//   the column, so -1 and 23 are left and right of the rows' ends);
+//   the signed column and row, so -1 and 23 are left and right of the rows'
+//   ends), then a new top row over the title's three (kRowCells, row -1,
+//   from the centre out), which the grid has only while a fighter needs it
+//   (the shared layouts move the grid down for it and shared/grid.ini says
+//   so);
 // * one sound bank (its shouts, then its win quotes) under one of the four
 //   bank ids no bank has, bound when a match loads it (a tag match has four
 //   fighters at most).
@@ -80,15 +90,32 @@ constexpr uint32_t kFirstAddedRecord = 140;
 constexpr uint32_t kDirectRows[] = {58, 64, 61, 62, 65};
 constexpr uint32_t kSpareRow = 63, kFirstVirtualRow = 69;
 struct GridPlace {
-    int32_t column;
-    uint32_t row;
+    int32_t column, row;
 };
-constexpr GridPlace kCells[] = {{19, 0}, {2, 0}, {20, 0}, {1, 0},  {21, 0}, {0, 0},  {22, 0},
+constexpr GridPlace kCells[] = {{19, 0}, {2, 0},  {20, 0}, {1, 0},  {21, 0}, {0, 0},  {22, 0},
                                 {23, 0}, {-1, 0}, {23, 1}, {-1, 1}, {23, 2}, {-1, 2}, {24, 1},
                                 {-2, 1}, {24, 2}, {-2, 2}, {24, 0}, {-2, 0}}; // pack.py CELLS
+constexpr GridPlace kRowCells[] = {{12, -1}, {10, -1}, {13, -1}, {9, -1}, {14, -1}, {8, -1},  {15, -1},
+                                   {7, -1},  {16, -1}, {6, -1},  {17, -1}, {5, -1}, {18, -1}, {4, -1},
+                                   {19, -1}, {3, -1},  {20, -1}, {2, -1},  {21, -1}, {1, -1}, {22, -1},
+                                   {0, -1},  {23, -1}, {-1, -1}, {24, -1}, {-2, -1}}; // pack.py ROW_CELLS
+// With the new top row: the '?' cell (random) moves up into it, the
+// cursor's place of row 1 (sub_06F4D7B8: row 1 at this, 65 a row) follows
+// the rows the layouts moved down (art.py ROWS_DOWN), and so does the
+// button guide while the grid is shown (see sub_04DC933C).
+constexpr uint32_t kRandomCell = 54, kCursorRowOne = 0x10531388;
+constexpr float kRowsCursorRow = 148.0f + 65.0f;
+bool g_grid_rows = false;       // shared/grid.ini `grid = rows`: the grid with the new top row
 constexpr uint32_t kFirstAddedCell = 62;
 constexpr uint32_t kSpacers[2] = {0x1053138C, 0x105314CC}; // the grilles over the top row's ends: left, right
 constexpr uint32_t kFreeBanks[] = {1, 122, 233, 253};
+
+std::optional<GridPlace> cell_of(size_t k) {
+    if (k < std::size(kCells)) return kCells[k];
+    k -= std::size(kCells);
+    if (g_grid_rows && k < std::size(kRowCells)) return kRowCells[k];
+    return std::nullopt;
+}
 
 uint32_t row_of(size_t k) {
     return k < std::size(kDirectRows) ? kDirectRows[k]
@@ -132,7 +159,9 @@ constexpr uint32_t kVoiceLists = 0x107D44EC;   // 63 x {u32 entries, u32 count, 
 // tones its pack appends (character.ini voice_extra), added to its list.
 constexpr uint32_t kVoiceMasks = 0x105DEFDC;   // 10 x u32 by category
 constexpr uint32_t kShoutMask = 0x20;        // category 5: shouts
-constexpr uint32_t kItemSounds = 0x107D4044;   // 63 x {u32 sound ids, u32 count}
+constexpr uint32_t kItemSounds = 0x107D4044;   // 63 x {u32 sound ids, u32 count}: a move's item sound n
+// (12 << 24 | n); an added fighter's own sound effects (character.ini
+// sound_extra) follow the donor's.
 constexpr uint32_t kSoundTable = 0x107D4AC0;   // 8506 x {u32 tone, u32 bank id, u32 group, u32 flags}
 constexpr uint32_t kSoundCount = 8506;
 constexpr uint32_t kFirstNewSound = 0x221E;
@@ -208,7 +237,7 @@ struct Added {
     uint32_t id = 0, records[2] = {0, 0}, row = 0;
     uint32_t cell = 0;              // its select grid cell (0: none)
     int32_t column = 0;             // and the cell's column and row
-    uint32_t grid_row = 0;
+    int32_t grid_row = 0;
     uint32_t donor = 0, donor_row = 0; // the donor's select id and motion row
     bool female = true;
     std::string code;
@@ -244,7 +273,11 @@ struct Voice {
     std::vector<uint32_t> extra;               // those shouts' tones in its bank (character.ini voice_extra),
     std::vector<uint32_t> extra_sounds;        // their sound ids
     uint32_t shout_entry = 0;                  // the donor's last shout entry (theirs copy it)
-    uint32_t item_sounds = 0, items = 0;       // its item sounds (the donor's, moved) and their count
+    uint32_t item_sounds = 0, items = 0;       // its item sounds (the donor's, moved, then its effects) and their
+                                               // count
+    std::vector<uint32_t> effects;             // its sound effects' tones in its bank (character.ini sound_extra:
+                                               // its Tekken 7 moves' and projectiles' sounds, convert/sounds.py)
+    std::vector<uint32_t> effect_sounds;       // their sound ids
 };
 std::vector<Voice> g_voice;
 uint32_t g_sound_table = 0, g_sound_count = 0; // the extended sound table (0: the title's)
@@ -344,12 +377,17 @@ struct Pack {
     int slot = -1;     // its number, as the importer chose it (shared/ holds pictures by number)
     uint32_t chr_tones = 0; // its voice bank's shouts (the win quotes' tones come after; 0: no merged bank)
     std::vector<uint32_t> voice_extra; // its bank's shouts past the donor's (appended to the voice list)
+    std::vector<uint32_t> sound_extra; // its bank's sound effects (appended to the item sounds)
     std::vector<Weapon> weapons;       // character.ini weapons: k:parent:points[:summon] (see pose_weapons)
     std::vector<std::string> outfits;  // optional complete body sets, in chooser order
+    std::optional<gauge::Config> gauge; // a Tekken 7 2D fighter's gauge (title/gauge.h)
 };
 
 fs::path packs_directory() {
     if (const char* dir = std::getenv("TTT2_CHARACTERS"); dir && *dir) return dir;
+#ifdef _WIN32
+    if (const char* data = std::getenv("LOCALAPPDATA"); data && *data) return fs::path(data) / "TTT2Ultimate/characters";
+#endif
     if (const char* data = std::getenv("XDG_DATA_HOME"); data && *data) return fs::path(data) / "ttt2/characters";
     const char* home = std::getenv("HOME");
     return fs::path(home ? home : ".") / ".local/share/ttt2/characters";
@@ -394,12 +432,18 @@ std::optional<Pack> read_pack(const fs::path& directory) {
         else if (key == "sex") pack.female = value != "male";
         else if (key == "slot") pack.slot = ini_number(value).value_or(-1);
         else if (key == "chr_tones") pack.chr_tones = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, 10));
+        else if (key == "gauge") {
+            if (gauge::Config config; gauge::parse(value, config)) pack.gauge = config;
+        }
         else if (key == "outfits") {
             std::istringstream names(value);
             for (std::string code; names >> code;) pack.outfits.push_back(code);
         } else if (key == "voice_extra") {
             std::istringstream tones(value);
             for (uint32_t tone; tones >> tone;) pack.voice_extra.push_back(tone);
+        } else if (key == "sound_extra") {
+            std::istringstream tones(value);
+            for (uint32_t tone; tones >> tone;) pack.sound_extra.push_back(tone);
         } else if (key == "weapons") { // k:parent:points[:summon], points n or n>slot, e.g. 1:9:0,1,2 or 4:9:0>0,1>1:3
             std::istringstream items(value);
             for (std::string item; items >> item;) {
@@ -429,7 +473,7 @@ std::optional<Pack> read_pack(const fs::path& directory) {
                          std::all_of(pack.code.begin(), pack.code.end(), [](char c) { return c >= 'a' && c <= 'z'; });
     if (!code_ok || pack.donor.empty()) {
         std::fprintf(stderr, "ttt2: warning: %s needs a three-letter `code` and a `donor`; skipped\n",
-                     (directory / "character.ini").c_str());
+                     (directory / "character.ini").string().c_str());
         return std::nullopt;
     }
     std::error_code ec;
@@ -450,7 +494,7 @@ std::optional<Pack> read_pack(const fs::path& directory) {
                 ((static_cast<size_t>(header[6]) << 8) | header[7]) == pack.outfits.size();
         if (!valid) {
             std::fprintf(stderr, "ttt2: warning: %s: invalid/incomplete outfit sets; using the default costume\n",
-                         directory.c_str());
+                         directory.string().c_str());
             pack.outfits.clear();
         }
     }
@@ -613,7 +657,7 @@ std::vector<std::string> serve_raw(const std::map<std::string, std::map<uint32_t
     std::vector<std::string> failed;
     for (const auto& [name, map] : raw) {
         if (vfs::set_archive_entries(name, map)) continue;
-        std::fprintf(stderr, "ttt2: warning: %s: its entries of %s could not be added\n", from.c_str(), name.c_str());
+        std::fprintf(stderr, "ttt2: warning: %s: its entries of %s could not be added\n", from.string().c_str(), name.c_str());
         failed.push_back(name);
     }
     return failed;
@@ -659,7 +703,7 @@ bool add_entries(const Pack& pack, uint32_t donor_row, size_t slot) {
         } else if (f.name.size() < 4 ||
                    (f.name.compare(f.name.size() - 4, 4, ".mop") != 0 &&
                     (f.name.size() < 10 || f.name.compare(f.name.size() - 10, 10, ".havok.xml") != 0))) {
-            std::fprintf(stderr, "ttt2: warning: neither %s nor its donor has %s\n", pack.directory.c_str(),
+            std::fprintf(stderr, "ttt2: warning: neither %s nor its donor has %s\n", pack.directory.string().c_str(),
                          f.name.c_str());
             return false;
         }
@@ -669,6 +713,7 @@ bool add_entries(const Pack& pack, uint32_t donor_row, size_t slot) {
     std::vector<std::string> bank_files;
     voice.chr_tones = pack.chr_tones;
     voice.extra = pack.voice_extra;
+    voice.effects = pack.sound_extra;
     for (size_t b = 0; b < std::size(kVoiceBanks); ++b) {
         if (b == 1) continue; // win quotes: in se_Chr_ (an older pack's own se_Dwi_ is not played)
         const std::string name = std::string(kVoiceBanks[b]) + pack.code + ".nus3bank";
@@ -737,11 +782,11 @@ void add_shared(const fs::path& directory) {
         if (!contents) continue;
         if (!add_title_copy(located, name, *key, *contents, entries, raw)) {
             std::fprintf(stderr, "ttt2: warning: %s: %s does not fit the title's entry; left out\n",
-                         directory.c_str(), name.c_str());
+                         directory.string().c_str(), name.c_str());
         }
     }
     if (!vfs::set_archive_entries("content/hdd/data100", entries)) {
-        std::fprintf(stderr, "ttt2: warning: %s could not be added\n", directory.c_str());
+        std::fprintf(stderr, "ttt2: warning: %s could not be added\n", directory.string().c_str());
         return;
     }
     const auto failed = serve_raw(raw, directory);
@@ -787,7 +832,7 @@ void patch_sounds() {
             const uint32_t bank = load(kSoundTable + 16 * sid + 4);
             if (bank == chr_bank(donor) || (voice.chr_tones && bank == dwi_bank(donor))) extra.push_back({k, sid});
         }
-        if (voice.keys[0]) shouts += static_cast<uint32_t>(voice.extra.size());
+        if (voice.keys[0]) shouts += static_cast<uint32_t>(voice.extra.size() + voice.effects.size());
         if (voice.name_tone) ++names;
     }
     if (!extra.empty() || names || shouts) {
@@ -828,6 +873,22 @@ void patch_sounds() {
             }
             voice.shout_entry = shout;
         }
+        // Its sound effects: copies of the donor's first item sound's entry
+        // playing the appended tones (its bank's item sound tones:
+        // convert/voice.py).
+        for (size_t k = 0; k < g_added.size(); ++k) {
+            Voice& voice = g_voice[k];
+            const uint32_t row = kItemSounds + 8 * g_added[k].donor;
+            if (!g_added[k].active || !voice.keys[0] || voice.effects.empty() || load(row + 4) == 0) continue;
+            for (const uint32_t tone : voice.effects) {
+                const uint32_t to = g_sound_table + 16 * next;
+                std::memcpy(guest_pointer(to), guest_pointer(kSoundTable + 16 * load(load(row))), 16);
+                store(to, tone);
+                store(to + 4, 0xFFFFFFFF);
+                voice.effect_sounds.push_back(next);
+                voice.copies.push_back(next++);
+            }
+        }
     }
     for (size_t k = 0; k < g_added.size(); ++k) {
         if (!g_added[k].active) continue;
@@ -852,12 +913,15 @@ void patch_sounds() {
             store16(to + 12, kShoutMask);
         }
         // The item sounds.
-        voice.items = load(kItemSounds + 8 * donor + 4);
+        const uint32_t theirs = load(kItemSounds + 8 * donor + 4);
+        voice.items = theirs + static_cast<uint32_t>(voice.effect_sounds.size());
         if (voice.items != 0) {
             voice.item_sounds = system_alloc(4 * voice.items);
-            for (uint32_t e = 0; e < voice.items; ++e) {
+            for (uint32_t e = 0; e < theirs; ++e) {
                 store(voice.item_sounds + 4 * e, moved_id(load(load(kItemSounds + 8 * donor) + 4 * e)));
             }
+            for (size_t e = 0; e < voice.effect_sounds.size(); ++e)
+                store(voice.item_sounds + 4 * (theirs + static_cast<uint32_t>(e)), voice.effect_sounds[e]);
         }
     }
 }
@@ -882,18 +946,24 @@ void patch_title(size_t k) {
 // nothing moves to.
 void place_cells() {
     struct Cell {
-        int32_t column;
-        uint32_t row, cell;
+        int32_t column, row;
+        uint32_t cell;
         bool operator<(const Cell& o) const { return std::tie(column, row) < std::tie(o.column, o.row); }
     };
+    if (g_grid_rows && load(kGrid + 32 * kRandomCell + kCellId) == 63 &&
+        load(kGrid + 32 * kRandomCell + kCellColumn) == 11) {
+        store(kGrid + 32 * kRandomCell + kCellRow, static_cast<uint32_t>(-1));
+        store(kCursorRowOne, std::bit_cast<uint32_t>(kRowsCursorRow));
+    }
     std::vector<Cell> cells;
     for (uint32_t c = 0; c < kTitleCells; ++c) {
-        cells.push_back({static_cast<int32_t>(load(kGrid + 32 * c + kCellColumn)), load(kGrid + 32 * c + kCellRow), c});
+        cells.push_back({static_cast<int32_t>(load(kGrid + 32 * c + kCellColumn)),
+                         static_cast<int32_t>(load(kGrid + 32 * c + kCellRow)), c});
     }
     uint32_t last = 0;
     for (size_t k = 0; k < g_added.size(); ++k) {
         const Added& added = g_added[k];
-        if (k >= std::size(kCells)) break;
+        if (!cell_of(k)) break;
         const uint32_t cell = kFirstAddedCell + static_cast<uint32_t>(k), at = kGrid + 32 * cell;
         last = std::max(last, cell);
         if (!added.active || added.cell == 0) {
@@ -903,7 +973,7 @@ void place_cells() {
         }
         store(at + kCellId, added.id);
         store(at + kCellColumn, static_cast<uint32_t>(added.column));
-        store(at + kCellRow, added.grid_row);
+        store(at + kCellRow, static_cast<uint32_t>(added.grid_row));
         cells.push_back({added.column, added.grid_row, cell});
     }
     if (last == 0) return;
@@ -1171,6 +1241,12 @@ void prepare_costumes(const Pack& pack, uint32_t donor, size_t slot) {
 // R = Rz Ry Rx, scale), and their last frame puts the bones back where they
 // wait (the pack's tiger: far below the floor).
 constexpr uint32_t kPlayerSelectId = 84, kPlayerAnimator = 7944;
+} // namespace
+
+// The added fighter (its slot) a fighter is, or -1.
+int added_slot(uint32_t player) { return player ? slot_of_id(load(player + kPlayerSelectId)) : -1; }
+
+namespace {
 constexpr uint32_t kAnimatorSet = 8, kAnimatorValue = 12, kAnimatorFrame = 16;
 constexpr uint32_t kPart3 = 0x4000;         // an animator's value: an animation of part 3 (index below)
 constexpr uint32_t kModelInterface = 12948; // the model's interface: its method +68 gives the player
@@ -1230,6 +1306,16 @@ void prepare_roster() {
         }
     }
     std::sort(candidates.begin(), candidates.end());
+    {
+        std::ifstream grid(directory / "shared" / "grid.ini");
+        for (std::string line; std::getline(grid, line);) {
+            line = line.substr(0, line.find('#'));
+            const size_t equals = line.find('=');
+            if (equals != std::string::npos && trim(line.substr(0, equals)) == "grid") {
+                g_grid_rows = trim(line.substr(equals + 1)) == "rows";
+            }
+        }
+    }
     // Numbers: the one a pack names (the importer's choice, which the shared pictures follow), else the first free.
     // Packs of another format keep theirs (the importer's pack.places_of counts them too), unloaded.
     std::vector<Pack> packs;
@@ -1251,7 +1337,7 @@ void prepare_roster() {
             at.push_back(&pack);
         } else {
             std::fprintf(stderr, "ttt2: warning: %s: all %d places of added fighters are taken; skipped\n",
-                         pack.directory.c_str(), kMaxFighters);
+                         pack.directory.string().c_str(), kMaxFighters);
         }
     }
     outfit_menu::CodeOwners codes;
@@ -1270,35 +1356,35 @@ void prepare_roster() {
         const Pack& pack = *at[k];
         if (codes.conflicts(k)) {
             std::fprintf(stderr, "ttt2: warning: %s: duplicate fighter/outfit code; skipped\n",
-                         pack.directory.c_str());
+                         pack.directory.string().c_str());
             continue;
         }
         if (pack.format < kPackFormat) {
             std::fprintf(stderr,
                          "ttt2: warning: %s was made by an older importer (pack format %d, this game loads %d): add "
                          "it again (the launcher offers it); skipped\n",
-                         pack.directory.c_str(), pack.format, kPackFormat);
+                         pack.directory.string().c_str(), pack.format, kPackFormat);
             continue;
         }
         if (pack.format > kPackFormat) {
             std::fprintf(stderr,
                          "ttt2: warning: %s was made by a newer importer (pack format %d, this game loads %d): "
                          "update the game; skipped\n",
-                         pack.directory.c_str(), pack.format, kPackFormat);
+                         pack.directory.string().c_str(), pack.format, kPackFormat);
             continue;
         }
         const auto donor = fighter_id(pack.donor);
         const auto donor_row = donor ? motion_row(*donor) : std::nullopt;
         if (!donor || *donor >= 59 || !donor_row) {
             std::fprintf(stderr, "ttt2: warning: %s: no fighter `%s` to borrow from; skipped\n",
-                         pack.directory.c_str(), pack.donor.c_str());
+                         pack.directory.string().c_str(), pack.donor.c_str());
             continue;
         }
         if (fighter_id(pack.code) || std::any_of(g_added.begin(), g_added.end(), [&](const Added& a) {
                 return a.active && a.code == pack.code;
             })) {
             std::fprintf(stderr, "ttt2: warning: %s: the code `%s` is a fighter's already; skipped\n",
-                         pack.directory.c_str(), pack.code.c_str());
+                         pack.directory.string().c_str(), pack.code.c_str());
             continue;
         }
         Added& added = g_added[k];
@@ -1335,24 +1421,33 @@ void prepare_roster() {
         }
         if (added.outfits.size() != pack.outfits.size()) continue;
         if (!add_entries(pack, *donor_row, k)) {
-            std::fprintf(stderr, "ttt2: warning: %s could not be added\n", pack.directory.c_str());
+            std::fprintf(stderr, "ttt2: warning: %s could not be added\n", pack.directory.string().c_str());
             continue;
         }
         added.code_string = guest_string(pack.code);
         added.active = true;
-        if (k < std::size(kCells)) {
+        if (pack.gauge) gauge::configure(static_cast<int>(k), *pack.gauge, pack.directory);
+        if (const auto place = cell_of(k)) {
             added.cell = kFirstAddedCell + static_cast<uint32_t>(k);
-            added.column = kCells[k].column;
-            added.grid_row = kCells[k].row;
+            added.column = place->column;
+            added.grid_row = place->row;
         } else {
-            std::fprintf(stderr, "ttt2: warning: %s: no free cell left in the select grid\n", pack.directory.c_str());
+            std::fprintf(stderr, "ttt2: warning: %s: no free cell left in the select grid\n", pack.directory.string().c_str());
         }
         patch_title(k);
         prepare_art(pack, k, directory / "shared");
         prepare_costumes(pack, *donor, k);
         g_active = true;
-        std::fprintf(stderr, "ttt2: added the fighter %s from %s (id %u)\n", pack.code.c_str(), pack.directory.c_str(),
+        std::fprintf(stderr, "ttt2: added the fighter %s from %s (id %u)\n", pack.code.c_str(), pack.directory.string().c_str(),
                      added.id);
+    }
+    // Optional additions to a native fighter use the same archive overlay as
+    // shared art. Load them even when no added roster fighters are installed.
+    const auto armor = directory / "native" / "aki";
+    if (fs::is_regular_file(armor / "patch.json", ec) &&
+        fs::is_regular_file(armor / "keys" / "da52b90f.bin", ec) &&
+        fs::is_regular_file(armor / "keys" / "f1e8d23d.bin", ec)) {
+        add_shared(armor);
     }
     if (!g_active) return;
     add_shared(directory / "shared");
@@ -1580,6 +1675,7 @@ PPC_FUNC(sub_033D5064) { // record i of id
 // A record answered by an added fighter's records: k, its costume slot, or -1.
 int g_proxy_record = -1;   // a record that answers the proxy id meanwhile (see sub_044BE1EC)
 uint32_t g_proxy_id = 0;
+bool g_donor_ids = false;  // an added fighter's records answer its donor's id meanwhile (see sub_0726ABEC)
 #define RECORD_FIELD(name, value)                                                                                \
     PPC_FUNC(name##_orig);                                                                                       \
     PPC_FUNC(name) {                                                                                             \
@@ -1592,10 +1688,23 @@ uint32_t g_proxy_id = 0;
         }                                                                                                        \
         name##_orig(ctx, base);                                                                                  \
     }
-RECORD_FIELD(sub_033D50A8, g_proxy_record == static_cast<int>(ctx.r[3]) ? g_proxy_id : added.id) // its fighter
+RECORD_FIELD(sub_033D50A8, g_proxy_record == static_cast<int>(ctx.r[3]) ? g_proxy_id
+                           : g_donor_ids                                    ? added.donor
+                                                                            : added.id) // its fighter
 RECORD_FIELD(sub_033D50C8, costume)                                                              // its costume slot
 RECORD_FIELD(sub_033D50E8, added.row)                                                            // its motion row
 #undef RECORD_FIELD
+// A match's start in Arcade, VS and the like counts each fighter's plays (sub_0567356C: a saturating u16 counter)
+// in a table of 64 by select id (object +13924), the CPU's job queue right behind it (0x10856FCC: its workers, their
+// semaphore, the jobs pending). An added fighter's id (64 on) counted into the queue's fields; the 19th's (82) into
+// its semaphore's count, which woke the workers 65536 times with no job, the jobs pending fell below 0 and the match
+// waited for them forever after "Fight". Its donor's plays are counted instead.
+PPC_FUNC(sub_0726ABEC_orig);
+PPC_FUNC(sub_0726ABEC) {
+    g_donor_ids = true;
+    sub_0726ABEC_orig(ctx, base);
+    g_donor_ids = false;
+}
 // Its init callback (the fighters' one returns 1).
 PPC_FUNC(sub_033D5108_orig);
 PPC_FUNC(sub_033D5108) {
@@ -2395,7 +2504,11 @@ PPC_FUNC(sub_077537D0) {
     const uint32_t row = kItemSounds + 8 * g_added[k].donor, theirs[2] = {load(row), load(row + 4)};
     store(row, g_voice[k].item_sounds);
     store(row + 4, g_voice[k].items);
+    const uint32_t asked = ctx.r[3];
     with_donor_id(ctx, base, player, sub_077537D0_orig);
+    if (std::getenv("TTT2_TRACE_SOUNDS"))
+        std::fprintf(stderr, "ttt2: sounds: item sound %u of added fighter %d -> %08X (%u items)\n", asked, k,
+                     static_cast<uint32_t>(ctx.r[3]), g_voice[k].items);
     store(row, theirs[0]);
     store(row + 4, theirs[1]);
 }
@@ -2589,12 +2702,63 @@ PPC_FUNC(sub_07A5D01C) {
     sub_07A5D01C_orig(ctx, base);
 }
 
+// The button guide (the one object every menu shows, made at start-up:
+// placed by sub_04DC6A48 from kGuidePlace, r3 the guide, x r4, y r5 from the
+// screen's bottom), with the new top row: in the banner's place under the
+// grid while the grid is shown (sub_06F4D7B8 runs every frame then), where
+// the title put it elsewhere. sub_04DC933C runs for it every frame;
+// sub_04DC35F0 (its class's method 148) places it (r3, x r4, y r5, r6 0).
+constexpr uint32_t kGuidePlace = 0x0581F874;
+constexpr int32_t kRowsGuideDown = 40;
+constexpr uint32_t kGuideFramesShown = 3; // the grid's frames end this many guide frames after its last
+struct Guide {
+    uint32_t object = 0;
+    int32_t x = 0, y = 0;
+    bool moved = false;
+    uint32_t frames = 0, grid_frame = 0; // its frames, and the one of the grid's last
+    bool grid_seen = false;
+};
+Guide g_guide;
+
+void note_select_frame() {
+    g_guide.grid_frame = g_guide.frames;
+    g_guide.grid_seen = true;
+}
+
+PPC_FUNC(sub_04DC6A48_orig);
+PPC_FUNC(sub_04DC6A48) {
+    if (ctx.lr == kGuidePlace) {
+        g_guide.object = ctx.r[3];
+        g_guide.x = static_cast<int32_t>(ctx.r[4]);
+        g_guide.y = static_cast<int32_t>(ctx.r[5]);
+        g_guide.moved = false;
+    }
+    sub_04DC6A48_orig(ctx, base);
+}
+
+PPC_FUNC(sub_04DC35F0);
+PPC_FUNC(sub_04DC933C_orig);
+PPC_FUNC(sub_04DC933C) {
+    if (g_grid_rows && g_guide.object && ctx.r[3] == g_guide.object) {
+        ++g_guide.frames;
+        const bool shown = g_guide.grid_seen && g_guide.frames - g_guide.grid_frame <= kGuideFramesShown;
+        if (shown != g_guide.moved) {
+            g_guide.moved = shown;
+            const int32_t y = g_guide.y + (shown ? kRowsGuideDown : 0);
+            guest_call(ctx, base, sub_04DC35F0,
+                       {g_guide.object, static_cast<uint32_t>(g_guide.x), static_cast<uint32_t>(y), 0});
+        }
+    }
+    sub_04DC933C_orig(ctx, base);
+}
+
 // Shows the select grid's portraits and the grilles over its empty ends;
 // the grilles over the added fighters' cells are hidden again after every
 // call.
 PPC_FUNC(sub_06EF9C4C);
 PPC_FUNC(sub_06F4D7B8_orig);
 PPC_FUNC(sub_06F4D7B8) {
+    note_select_frame();
     const uint32_t ui = ctx.r[3];
     sub_06F4D7B8_orig(ctx, base);
     bool ends[2] = {false, false}; // added cells at the left end, the right end
@@ -3271,6 +3435,39 @@ void pose_weapons(PPCContext& ctx, uint8_t* base, uint32_t model, uint32_t playe
             }
         }
     }
+    // Preserve df4,2's working blade capsule. Its otherwise-unused second
+    // sphere gets a separate point below the tip, only during this move.
+    // The ordinary weapon guard point is refreshed above on every pose.
+    const int slot = slot_of_id(load(player + kPlayerSelectId));
+    const uint32_t move = load(player + 280);
+    const char* name = move && load(move) ? reinterpret_cast<const char*>(guest_pointer(load(move))) : "";
+    if (slot >= 0 && (written & 8) && noctis_hitbox::lower_wall_point(g_added[slot].code, name)) {
+        const uint32_t tip = player + kPlayerItemPoints + 12 * 3;
+        const auto low = noctis_hitbox::below_tip({loadf(tip),loadf(tip+4),loadf(tip+8)});
+        const uint32_t spare = player + kPlayerItemPoints + 12;
+        storef(spare,low.x);storef(spare+4,low.y);storef(spare+8,low.z);
+        // Temporary wall-miss trace: sample collision geometry without changing it.
+        const int frame = static_cast<int>(loadf(load(player + kPlayerAnimator) + kAnimatorFrame));
+        static std::map<uint32_t, int> last_trace_frame;
+        if (last_trace_frame[player] != frame) {
+            last_trace_frame[player] = frame;
+            if (frame >= 17 && frame <= 23) {
+                const uint32_t foe = load(player + 0x98);
+                std::fprintf(stderr, "noctis-wall move=%s frame=%d player=%08X foe=%08X tip=%.1f,%.1f,%.1f low=%.1f,%.1f,%.1f\n",
+                    name, frame, player, foe, loadf(tip),loadf(tip+4),loadf(tip+8),low.x,low.y,low.z);
+                const uint32_t foe_skeleton = foe ? guest_call(ctx, base, sub_04E1A4C8, {foe}) : 0;
+                const uint32_t foe_records = foe_skeleton ? load(foe_skeleton + kSkeletonRecords) : 0;
+                if (foe_records) {
+                    std::fprintf(stderr, "noctis-wall defender id=%u move=%08X bones=", load(foe+kPlayerSelectId),load(foe+280));
+                    for (int b=0;b<22;++b) {
+                        const uint32_t at=foe_records+kRecordSize*b+kRecordWorld+48;
+                        std::fprintf(stderr," %d:%.1f,%.1f,%.1f",b,loadf(at),loadf(at+4),loadf(at+8));
+                    }
+                    std::fprintf(stderr,"\n");
+                }
+            }
+        }
+    }
 }
 
 } // namespace
@@ -3344,12 +3541,16 @@ PPC_FUNC(sub_069D8B30) {
 // it at the touchdown (as TTT2's own landing does, sub_04336854 @0x43371ac),
 // so its landing cancel runs. Chained air moves (0x822C again) keep the arc;
 // 0x8226 in an air move restarts it from where the player is (dive kicks).
+// An air move that throws a projectile (Akuma's air fireball: frame 16)
+// hangs at its height until it has thrown it: falling on, one made late in
+// the jump touched down first, and going to ground_fall skipped the throw.
 namespace {
 constexpr uint32_t kPlayerY = 4, kPlayerFrame = 212, kPlayerFrame2 = 240, kPlayerFrameF = 248,
                    kPlayerFrameF2 = 252, kPlayerFrameFixed = 256, kPlayerMove = 280, kPlayerVy = 360,
                    kPlayerHold = 424, kPlayerHover = 901, kPlayerGravityMode = 132, kPlayerSlow1 = 1712,
                    kPlayerSlow2 = 1720;
-constexpr uint32_t kMoveGroundFall = 0x48;
+constexpr uint32_t kMoveGroundFall = 0x48, kMoveProperties = 0x50; // properties: 12 B {frame, id, value}
+constexpr uint32_t kProjectileSpawnProp = 0x8168;
 constexpr uint32_t kSlowMotionScale = 0x1030CD80; // f32 (sub_04E1A410)
 constexpr float kTitleGravity = 6.0f;             // 0x102520E4
 constexpr uint32_t kArcProp = 0x8226, kArcBakedProp = 0x822D, kArcAirMoveProp = 0x822C;
@@ -3376,6 +3577,17 @@ void set_frame(uint32_t player, int32_t frame) { // as sub_04336854 @0x43371ac
     store(player + kPlayerFrameFixed, static_cast<uint32_t>(frame) << 12);
     storef(player + kPlayerFrameF, static_cast<float>(frame));
     storef(player + kPlayerFrameF2, static_cast<float>(frame));
+}
+
+// Whether the move throws a projectile after frame `frame`.
+bool throws_after(uint32_t move, int32_t frame) {
+    uint32_t row = load(move + kMoveProperties);
+    for (int i = 0; row != 0 && i < 256; ++i, row += 12) {
+        const uint32_t at = load(row), id = load(row + 4);
+        if (at == 0 && id == 0) break;
+        if (id == kProjectileSpawnProp && at < 0x4000 && static_cast<int32_t>(at) > frame) return true;
+    }
+    return false;
 }
 
 float arc_height(const Arc2D& s, int32_t n) {
@@ -3426,35 +3638,534 @@ void arc_property(uint32_t player, uint32_t id, uint32_t value) {
 }
 } // namespace
 
+namespace {
+std::map<uint32_t, damage::HitGrabContinuation> g_warp_strike_scaling;
+std::string_view damage_move_name(uint32_t player) {
+    const uint32_t move = player ? load(player + kPlayerMove) : 0;
+    return move && load(move) ? reinterpret_cast<const char*>(guest_pointer(load(move))) : "";
+}
+bool trace_noctis_player(uint32_t player) {
+    if (!player || !std::getenv("TTT2_TRACE_NOCTIS_AIR")) return false;
+    const int k = slot_of_id(load(player + kPlayerSelectId));
+    return k >= 0 && g_added[k].code == "mrz";
+}
+bool trace_noctis_air(uint32_t player) {
+    return trace_noctis_player(player) && damage_move_name(player).starts_with("Mz_jprp");
+}
+void trace_noctis_air_step(uint32_t player) {
+    if (!trace_noctis_player(player)) return;
+    static std::map<uint32_t, std::array<uint32_t, 6>> last;
+    const bool active = trace_noctis_air(player);
+    const std::array<uint32_t, 6> state = {load(player + kPlayerMove), load(player + kPlayerFrame),
+        load(player + 0x7f0), load(player + 0x63c), load(player + 0x628), load(player + 0x800)};
+    if (!last.count(player) || (last[player] != state && (active || last[player][0] != state[0]))) {
+        std::fprintf(stderr,"noctis-air FRAME player=%08X name=%.*s frame=%u held=%08X input_latch=%u hit_latch=%u lock=%u y=%.1f vy=%.1f owner=%u assist=%u\n",
+            player, int(damage_move_name(player).size()), damage_move_name(player).data(), state[1],state[2],
+            state[3],state[4],state[5],loadf(player+kPlayerY),loadf(player+kPlayerVy),
+            load(player+0x1e80),load(player+0x1e88));
+    }
+    last[player] = state;
+}
+}
+
+// Geese has a character-specific grounded combo curve in T7's executable,
+// rather than in its MVLT/move damage rows. TTT2 has no corresponding fighter.
+// Keep its native hit accounting/reset logic, then scale this hit's output
+// before sub_03AE15D8 copies it into the defender's health-damage fields.
+PPC_FUNC(sub_04E184D0);
+PPC_FUNC(sub_04E18548);
+PPC_FUNC(sub_03AE1704_orig);
+PPC_FUNC(sub_03AE1704) { // defender r3, attacker r4, damage result r5
+    const uint32_t defender = ctx.r[3], attacker = ctx.r[4], result = ctx.r[5];
+    const int k = attacker ? slot_of_id(load(attacker + kPlayerSelectId)) : -1;
+    if (!defender || !result) {
+        sub_03AE1704_orig(ctx, base);
+        return;
+    }
+    const uint32_t flags = load(result + 0x3c);
+    uint32_t percent = 100;
+    auto& warp = g_warp_strike_scaling[defender];
+    const bool noctis = k >= 0 && g_added[k].code == "mrz";
+    if (load(result + 0x40) != 4) {
+        warp.clear(); // any intervening collision invalidates the continuation
+        if (noctis && damage_move_name(attacker) == "Mz_rp00F" &&
+            (flags & 0x00200000u) && !(flags & 0x80000000u)) {
+            // sub_03AE1704 @03AE1C30 uses this defender counter and table.
+            // Preserve the initiating hit's native curve through the forced
+            // victim state, whose flat property otherwise bypasses the curve.
+            const uint32_t count = load(defender + 0x1cc);
+            const uint32_t native_percent = count <= 8 ? load8(0x101ce884 + count) : 30;
+            warp.remember(attacker, native_percent);
+        }
+    } else if (noctis && damage_move_name(defender) == "Mz_rp01F_n") {
+        if (const uint32_t inherited = warp.take(attacker)) percent = inherited;
+    }
+    if (k >= 0 && g_added[k].code == "mry" &&
+        damage::ground_hit(flags, load8(defender + 0x36b))) {
+        const uint32_t stats = guest_call(ctx, base, sub_04E184D0, {attacker});
+        const uint32_t prior_hits = stats ? load(stats + 0x50) : 0;
+        percent = damage::geese_ground_percent(prior_hits);
+    }
+    std::array<int32_t, 4> before;
+    for (size_t i = 0; i < before.size(); ++i) before[i] = static_cast<int32_t>(load(result + 0x2c + 4 * i));
+    sub_03AE1704_orig(ctx, base);
+    // Narrow diagnostic for the optional native Armor King wall-throw graft.
+    const auto ak_attacker_move = damage_move_name(attacker);
+    const auto ak_defender_move = damage_move_name(defender);
+    if (ak_attacker_move == "Knk_#2247" || ak_attacker_move == "Knk_#2248" ||
+        ak_defender_move == "Knk_#2247" || ak_defender_move == "Knk_#2248") {
+        std::fprintf(stderr,"armor-wall DAMAGE attacker=%08X move=%.*s defender=%08X victim=%.*s kind=%u flags=%08X combo_count=%u pending_kind=%u pending_points=%u dealt=%d scale=%u\n",
+            attacker,int(ak_attacker_move.size()),ak_attacker_move.data(),
+            defender,int(ak_defender_move.size()),ak_defender_move.data(),
+            load(result+0x40),flags,load(defender+0x1cc),load8(defender+0x487),
+            load(defender+0x4a4),static_cast<int32_t>(load(result+0x2c))-before[0],percent);
+    }
+    if (trace_noctis_air(attacker))
+        std::fprintf(stderr,"noctis-air HIT player=%08X name=%.*s frame=%u defender=%08X victim=%.*s kind=%u flags=%08X damage=%d\n",
+            attacker,int(damage_move_name(attacker).size()),damage_move_name(attacker).data(),
+            load(attacker+kPlayerFrame),defender,int(damage_move_name(defender).size()),
+            damage_move_name(defender).data(),load(result+0x40),flags,
+            static_cast<int32_t>(load(result+0x2c))-before[0]);
+    if (percent == 100) return;
+    // The result contains four accumulated damage channels. Scale only the
+    // contribution just computed, retaining earlier hits and native modifiers.
+    for (size_t i = 0; i < before.size(); ++i) {
+        const uint32_t at = result + 0x2c + 4 * i;
+        const int32_t added = static_cast<int32_t>(load(at)) - before[i];
+        store(at, before[i] + damage::scale_hit(added, percent));
+    }
+    // Native percentage is in tenths of one percent; update the same record
+    // the training HUD reads, rather than only changing the health loss.
+    if (const uint32_t shown = guest_call(ctx, base, sub_04E18548, {attacker}))
+        store(shown + 0xb4, uint64_t{load(shown + 0xb4)} * percent / 100);
+}
+
 PPC_FUNC(sub_03AE86A0_orig);
 PPC_FUNC(sub_03AE86A0) { // a move property (player r3, {id, value} r4, pass r5)
     const uint32_t player = ctx.r[3], id = load(ctx.r[4]);
+    // (each property comes twice, pass 1 then 0: acted on once)
+    if ((id == gauge::kAdd || id == gauge::kNoGain || id == gauge::kFlash || id == gauge::kMaxAdd ||
+         id == gauge::kStop) &&
+        (ctx.r[5] != 0 || gauge::property(player, added_slot(player), id, load(ctx.r[4] + 4))))
+        return;
     if ((id == kArcProp || id == kArcBakedProp || id == kArcAirMoveProp) && ctx.r[5] == 0 &&
         slot_of_id(load(player + kPlayerSelectId)) >= 0)
         arc_property(player, id, load(ctx.r[4] + 4));
     if ((id == kSummonProp || id == kDismissProp || id == kHoldProp) && ctx.r[5] == 0 &&
         slot_of_id(load(player + kPlayerSelectId)) >= 0)
         summon_property(player, id, load(ctx.r[4] + 4));
+    const bool trace_special = (std::getenv("TTT2_TRACE_AKUMA") || std::getenv("TTT2_TRACE_SPECIAL_CANCELS")) &&
+                               (id == 0x8093 || id == 0x80a5) && ctx.r[5] == 0;
+    const uint32_t trace_value = trace_special ? load(ctx.r[4] + 4) : 0;
+    const uint32_t trace_frame = trace_special ? load(player + kPlayerFrame) : 0;
+    const bool noctis_trace = trace_noctis_air(player) && (id == 0x8093 || id == 0x80a5);
+    const uint32_t requested = noctis_trace ? load(ctx.r[4]+4) : 0;
+    const uint32_t pass = ctx.r[5];
     sub_03AE86A0_orig(ctx, base);
+    if (noctis_trace)
+        std::fprintf(stderr,"noctis-air SET player=%08X frame=%u prop=%04X requested=%u stored=%u pass=%u\n",
+            player,load(player+kPlayerFrame),id,requested,load(player+(id==0x80a5?0x628:0x63c)),pass);
+    if (trace_special)
+        std::fprintf(stderr, "akuma-buffer SET player=%08X frame=%u requested=%u stored=%u\n",
+                     player, trace_frame, trace_value, load(player + (id == 0x80a5 ? 0x628 : 0x63c)));
+}
+
+PPC_FUNC(sub_0404FF30_orig);
+PPC_FUNC(sub_0404FF30) {
+    const uint32_t requirement = ctx.r[3], player = ctx.r[4];
+    const uint32_t kind = load(requirement);
+    if (bool result; (kind == gauge::kAtLeast || kind == gauge::kBelow || kind == gauge::kMaxOn) &&
+                     gauge::requirement(player, added_slot(player), kind, load(requirement + 4), result)) {
+        ctx.r[3] = result;
+        return;
+    }
+    const bool trace = (std::getenv("TTT2_TRACE_AKUMA") || std::getenv("TTT2_TRACE_SPECIAL_CANCELS")) &&
+        (kind == 307 || kind == 308 || ((kind == 46 || kind == 47) && load(player + 0x63c) != 0));
+    const uint32_t wanted = trace ? load(requirement + 4) : 0;
+    const uint32_t stored = trace ? load(player + (kind == 308 ? 0x628 : 0x63c)) : 0;
+    const uint32_t frame = trace ? load(player + kPlayerFrame) : 0;
+    const uint32_t move = trace ? load(player + kPlayerMove) : 0;
+    const bool noctis_trace = trace_noctis_air(player) &&
+        (kind == 307 || kind == 308 || kind == 46 || kind == 47 || kind == 457 || kind == 0x8093 || kind == 0x80a5);
+    const uint32_t noctis_wanted = noctis_trace ? load(requirement+4) : 0;
+    sub_0404FF30_orig(ctx, base);
+    if (noctis_trace)
+        std::fprintf(stderr,"noctis-air CHECK player=%08X frame=%u req=%u wanted=%u input_latch=%u hit_latch=%u result=%u\n",
+            player,load(player+kPlayerFrame),kind,noctis_wanted,load(player+0x63c),load(player+0x628),ctx.r[3]);
+    if (trace) {
+        static std::map<uint32_t, std::pair<uint32_t, uint32_t>> last;
+        const auto key = std::make_pair(move, frame);
+        if (wanted || kind != 307 || last[player] != key) {
+            std::fprintf(stderr, "akuma-buffer CHECK player=%08X move=%08X frame=%u req=%u wanted=%u stored=%u result=%u\n",
+                         player, move, frame, kind, wanted, stored, ctx.r[3]);
+            last[player] = key;
+        }
+    }
+}
+
+namespace {
+bool trace_eliza_assist(uint32_t player) {
+    if (!std::getenv("TTT2_TRACE_ELIZA_ASSIST") || !player) return false;
+    const int k = slot_of_id(load(player + kPlayerSelectId));
+    return k >= 0 && (g_added[k].code == "elz" || g_added[k].code == "kmi" || g_added[k].code == "mry" || g_added[k].code == "rei");
+}
+const char* assist_move_name(uint32_t player) {
+    const uint32_t move = load(player + kPlayerMove);
+    return move && load(move) ? reinterpret_cast<const char*>(guest_pointer(load(move))) : "?";
+}
+bool trace_glide_move(uint32_t player) {
+    const std::string_view name(assist_move_name(player));
+    return name == "Vp_rk00B" || name.starts_with("Vp_dash_") ||
+           name == "Kt_rk00F" || name == "Kt_shoryu02" ||
+           name == "Vp_6rklk" || name == "Vp_66lklk" ||
+           name == "Vp_66lklk_H" || name == "Vp_6rklkrk";
+}
+// Read the installed input window. The first Glide kick needs protection
+// only while it can select 3,3 or 3,4, not throughout its recovery.
+uint32_t assist_recovery(uint32_t player) {
+    const uint32_t move = load(player + kPlayerMove);
+    if (!move) return 0;
+    uint32_t row = load(move + 0x14);
+    if (!row) return 0;
+    uint32_t string_window_end = 0;
+    const bool first_kick = std::string_view(assist_move_name(player)) == "Vp_6rklk";
+    for (unsigned i = 0; i < 512; ++i, row += 32) {
+        if (load(row) == 0x8000)
+            return string_window_end ? string_window_end + 1 : load(row + 16);
+        const uint32_t button = load(row + 4);
+        if (first_kick && (button == 0x40000004 || button == 0x40000008 ||
+                           button == 4 || button == 8))
+            string_window_end = std::max(string_window_end, load(row + 20));
+    }
+    return 0;
+}
+// Read restored captures from the installed pack rather than maintaining
+// another list of character-specific special routes in the executable.
+eliza_assist::InputWindow special_assist_window(uint32_t player) {
+    eliza_assist::InputWindow result;
+    const int slot = player ? slot_of_id(load(player + kPlayerSelectId)) : -1;
+    const bool reina = slot >= 0 && g_added[slot].code == "rei";
+    const bool noctis = slot >= 0 && g_added[slot].code == "mrz";
+    const std::string_view name(assist_move_name(player));
+    const uint32_t move = load(player + kPlayerMove);
+    uint32_t row = move ? load(move + 0x14) : 0;
+    if (!row) return result;
+    for (unsigned i = 0; i < 512; ++i, row += 32) {
+        if (load(row) == 0x8000) break;
+        const uint32_t extra = load(row + 12);
+        const uint32_t mode = extra ? load(extra) : 0;
+        bool capture = false;
+        if (mode == 0x2800) {
+            uint32_t req = load(row + 8);
+            for (unsigned j = 0; req && j < 128; ++j, req += 8) {
+                const uint32_t kind = load(req);
+                if (kind == 690) break;
+                if (kind == 0x8093 && load(req + 4)) capture = true;
+            }
+        }
+        const uint32_t button = load(row + 4);
+        const bool attack_button = (button & 0xf) && !(button & ~0x4000000fu);
+        result.add(mode, attack_button ? button : 0, load(row + 20), capture);
+        if (noctis) result.bridge_last = std::max(result.bridge_last,
+            eliza_assist::noctis_contact_bridge(name, load(row), button, mode, load(row + 20)));
+        if (reina) result.last = std::max(result.last, eliza_assist::reina_stance_window(
+            name, load(row), button, mode, load(row + 20)));
+    }
+    return result;
+}
+std::map<uint32_t, uint32_t> g_special_assist_returns;
+bool special_assist_sequence(uint32_t player) {
+    static std::map<uint32_t, eliza_assist::Session> sequences;
+    if (!player) return false;
+    const int slot = slot_of_id(load(player + kPlayerSelectId));
+    const bool supported = slot >= 0 &&
+        eliza_assist::supported(g_added[slot].code);
+    if (!supported) {
+        sequences.erase(player);
+        return false;
+    }
+    auto& state = sequences[player];
+    const bool was_active = state.active;
+    const uint32_t previous_partner = state.partner;
+    const std::string_view name(assist_move_name(player));
+    // Preserve the player-confirmed Glide entry and first-kick boundaries.
+    const bool legacy = g_added[slot].code == "elz" &&
+        (eliza_assist::entry(name) || eliza_assist::continuation(name));
+    const auto window = legacy ? eliza_assist::InputWindow{} : special_assist_window(player);
+    const bool glide_finisher = name == "Vp_66lklk" || name == "Vp_66lklk_H" || name == "Vp_6rklkrk";
+    const bool own_move = !glide_finisher && eliza_assist::owns_move(g_added[slot].code, name);
+    const bool starts = legacy ? eliza_assist::entry(name) :
+        ((g_added[slot].code != "mrz" || own_move) && (window.buffered || (own_move && window.last)));
+    const uint32_t move = load(player + kPlayerMove);
+    const uint32_t bridge_end = g_added[slot].code == "mry" && move ?
+        eliza_assist::geese_contact_bridge(name, load(move + 0x68)) :
+        g_added[slot].code == "mrz" ? window.bridge_end() : 0;
+    const bool continues = legacy ? eliza_assist::continuation(name) : bridge_end != 0;
+    const bool active = state.update_window(true, load(player + 0x408) == 0,
+        load(player + 0x1e88) == 1, load(player + 0xac), load(player + kPlayerFrame),
+        legacy ? assist_recovery(player) : std::max(window.control_end(), bridge_end), starts, continues);
+    if (was_active && !active && load(player + 0x1e88) == 1 &&
+        load(player + 0x408) == 0 && previous_partner == load(player + 0xac))
+        g_special_assist_returns[player] = previous_partner;
+    if (!active) sequences.erase(player);
+    return active;
+}
+bool special_assist_pair(uint32_t player) {
+    return player && (special_assist_sequence(player) ||
+                     special_assist_sequence(load(player + 0xac)));
+}
+// Opt-in movement trace for comparing the imported rush with native SAV.
+void trace_assist_follow(uint32_t player) {
+    if (!player || !std::getenv("TTT2_TRACE_ASSIST_FOLLOW")) return;
+    const uint32_t partner = load(player + 0xac);
+    if (!partner || (!load(player + 0x1e88) && !load(partner + 0x1e88))) return;
+    const std::string_view name(assist_move_name(player));
+    const std::string_view partner_name(assist_move_name(partner));
+    const auto relevant = [](std::string_view n) { return n.starts_with("My_") || n.starts_with("Mt_") || n.starts_with("Vp_") || n.starts_with("Zbr_"); };
+    if (!relevant(name) && !relevant(partner_name)) return;
+    const uint32_t opponent = load(player + 0x98);
+    std::fprintf(stderr,
+        "assist-follow player=%08X name=%s frame=%u owner=%u assist=%u sideflag=%u pos=%.3f,%.3f input=%08X dir=%08X timer=%u stage=%u pending=%08X speed=%.3f/%.3f/%.3f/%.3f partner=%08X partner_name=%s partner_frame=%u partner_owner=%u partner_pos=%.3f,%.3f opponent=%08X opponent_pos=%.3f,%.3f\n",
+        player, assist_move_name(player), load(player + kPlayerFrame),
+        load(player + 0x1e80), load(player + 0x1e88), load(player + 0x1e8c),
+        loadf(player), loadf(player + 8), load(player + 0x7f0), load(player + 0x7f4),
+        load(player + 0x7c0), load(player + 0x7b8), load(player + 0x7c4),
+        loadf(player + 0x1e90), loadf(player + 0x1ea0), loadf(player + 0x1ea4), loadf(player + 0x1ea8),
+        partner, assist_move_name(partner), load(partner + kPlayerFrame), load(partner + 0x1e80),
+        loadf(partner), loadf(partner + 8), opponent,
+        opponent ? loadf(opponent) : 0.0f, opponent ? loadf(opponent + 8) : 0.0f);
+}
+void trace_eliza_move(uint32_t player) {
+    if (!trace_eliza_assist(player)) return;
+    static std::map<uint32_t, std::pair<uint32_t, bool>> last;
+    const uint32_t move = load(player + kPlayerMove);
+    auto& old = last[player];
+    const bool glide = trace_glide_move(player);
+    if (move != old.first && (glide || old.second))
+        std::fprintf(stderr, "eliza-assist MOVE player=%08X move=%08X name=%s frame=%u input=%08X lock=%u flags=%08X/%08X\n",
+                     player, move, assist_move_name(player), load(player + kPlayerFrame),
+                     load(player + 0x7f0), load(player + 0x800), load(player + 0x480), load(player + 0x484));
+    old = {move, glide};
+}
+} // namespace
+
+PPC_FUNC(sub_04E187B8_orig);
+// A deferred native return is a request, not a new timeout. Complete it at
+// selection boundary, before either fighter decodes another human input.
+// A committed finisher keeps animating on the native inactive assist route.
+void finish_special_assist(PPCContext& ctx, uint8_t* base, uint32_t player) {
+    if (!player) return;
+    const uint32_t pair[] = {player, load(player + 0xac)};
+    for (uint32_t assist : pair) {
+        if (!assist) continue;
+        special_assist_sequence(assist);
+        const auto it = g_special_assist_returns.find(assist);
+        if (it == g_special_assist_returns.end()) continue;
+        const uint32_t partner = it->second;
+        g_special_assist_returns.erase(it);
+        if (load(assist + 0xac) != partner || load(assist + 0x1e88) != 1 ||
+            !load(assist + 0x1e80)) continue;
+        store(assist + 0x7b8, 0);
+        store(assist + 0x7c0, UINT32_MAX);
+        store(assist + 0x7c4, 0);
+        guest_call(ctx, base, sub_04E187B8_orig, {assist, 1});
+    }
+}
+
+// Keep the main fighter on its native inactive/assist route while the
+// supported assist owns a special or string continuation. Filtering attack buttons alone left the main
+// fighter on human movement, rather than the native waiting/follow route.
+PPC_FUNC(sub_03F53238_orig);
+PPC_FUNC(sub_03F52F20_orig);
+PPC_FUNC(sub_03F52F20) {
+    const uint32_t player = ctx.r[3];
+    const bool owned_before = player && load(player + 0x1e80);
+    finish_special_assist(ctx, base, player);
+    const uint32_t partner = player ? load(player + 0xac) : 0;
+    if (special_assist_sequence(partner) ||
+        (owned_before && !load(player + 0x1e80)))
+        sub_03F53238_orig(ctx, base);
+    else
+        sub_03F52F20_orig(ctx, base);
+}
+void trace_assist_lifetime(const char* operation, uint32_t player, bool deferred) {
+    if (!std::getenv("TTT2_TRACE_ELIZA_ASSIST") || !player) return;
+    const uint32_t partner = load(player + 0xac);
+    if (!trace_eliza_assist(player) && !trace_eliza_assist(partner)) return;
+    std::fprintf(stderr, "eliza-assist LIFETIME op=%s deferred=%u player=%08X name=%s frame=%u owner=%u assist=%u partner=%08X partner_name=%s partner_owner=%u partner_assist=%u timer=%u\n",
+        operation, deferred, player, assist_move_name(player), load(player + kPlayerFrame),
+        load(player + 0x1e80), load(player + 0x1e88), partner,
+        partner ? assist_move_name(partner) : "?", partner ? load(partner + 0x1e80) : 0,
+        partner ? load(partner + 0x1e88) : 0, load(player + 0x7c0));
+}
+// Native assist expiry/ownership operations. Defer them while the actual
+// supported special/string input window is still open. Committing a
+// terminal move releases control without waiting for its recovery.
+// On recovery, interruption, tag-out or assist cancellation,
+// the original operations execute unchanged.
+PPC_FUNC(sub_04E185EC_orig);
+PPC_FUNC(sub_04E185EC) {
+    const bool deferred = special_assist_sequence(ctx.r[3]);
+    trace_assist_lifetime("handoff", ctx.r[3], deferred);
+    if (!deferred) sub_04E185EC_orig(ctx, base);
+}
+PPC_FUNC(sub_04E187B8_orig);
+PPC_FUNC(sub_04E187B8) {
+    const bool deferred = special_assist_sequence(ctx.r[3]);
+    trace_assist_lifetime("expiry", ctx.r[3], deferred);
+    if (deferred) {
+        // 0433B1D8 consumes the native countdown, then clears it to -1
+        // before calling us. Keep the return request alive for the next
+        // frame; otherwise neutral recovery has no expiry left to execute.
+        store(ctx.r[3] + 0x7c0, eliza_assist::kRetryExpiryNextFrame);
+    } else {
+        sub_04E187B8_orig(ctx, base);
+    }
+}
+PPC_FUNC(sub_04E19DE4_orig);
+PPC_FUNC(sub_04E19DE4) {
+    const bool deferred = ctx.r[4] == 0 && special_assist_pair(ctx.r[3]);
+    trace_assist_lifetime("end", ctx.r[3], deferred);
+    if (!deferred) sub_04E19DE4_orig(ctx, base);
+}
+PPC_FUNC(sub_03F53238_orig);
+PPC_FUNC(sub_03F53238) {
+    const uint32_t player = ctx.r[3];
+    const bool owned_before = player && load(player + 0x1e80);
+    finish_special_assist(ctx, base, player);
+    const bool trace = trace_eliza_assist(player) && trace_glide_move(player);
+    const uint32_t controller = ctx.r[4], raw = ctx.r[5], pressed = ctx.r[6];
+    // Decode human input while an installed special/string selection window
+    // is open; terminal moves retain the native inactive assist route.
+    const bool glide_input = special_assist_sequence(player);
+    if (glide_input || (!owned_before && player && load(player + 0x1e80)))
+        sub_03F52F20_orig(ctx, base);
+    else
+        sub_03F53238_orig(ctx, base);
+    if (trace)
+        std::fprintf(stderr, "eliza-assist ROUTE player=%08X name=%s frame=%u controller=%u raw=%08X pressed=%08X owner=%u assist=%u assist_side=%u control=%u return_timer=%u routed=%08X\n",
+                     player, assist_move_name(player), load(player + kPlayerFrame), controller, raw, pressed,
+                     load(player + 0x1e80), load(player + 0x1e88), load(player + 0x1f10),
+                     load(player + 0x408), load(player + 0x7c0), load(player + 0x7f0));
+}
+
+PPC_FUNC(sub_03F51E70_orig);
+PPC_FUNC(sub_03F51E70) {
+    const uint32_t player = ctx.r[3], row = ctx.r[4];
+    const bool trace = trace_eliza_assist(player) && trace_glide_move(player) && row && load(row + 4);
+    const bool noctis_trace = trace_noctis_air(player) && row && load(row+4);
+    sub_03F51E70_orig(ctx, base);
+    if (noctis_trace)
+        std::fprintf(stderr,"noctis-air INPUT player=%08X frame=%u buttons=%08X mode=%08X window=%u-%u start=%u held=%08X result=%u\n",
+            player,load(player+kPlayerFrame),load(row+4),load(load(row+12)),load(row+16),load(row+20),
+            load(row+24),load(player+0x7f0),ctx.r[3]);
+    if (trace)
+        std::fprintf(stderr, "eliza-assist INPUT player=%08X name=%s frame=%u row=%08X dir=%08X buttons=%08X mode=%08X target=%u window=%u-%u start=%u held=%08X dirheld=%08X dirpress=%08X lock=%u result=%u\n",
+                     player, assist_move_name(player), load(player + kPlayerFrame), row, load(row), load(row + 4),
+                     load(load(row + 12)), load16(row + 28), load(row + 16), load(row + 20), load(row + 24),
+                     load(player + 0x7f0), load(player + 0x7f4), load(player + 0x7f8), load(player + 0x800), ctx.r[3]);
+}
+
+PPC_FUNC(sub_0414E7E4_orig);
+PPC_FUNC(sub_0414E7E4) {
+    const uint32_t player = ctx.r[6];
+    const bool trace = trace_eliza_assist(player) && trace_glide_move(player);
+    const bool noctis_trace = trace_noctis_air(player);
+    sub_0414E7E4_orig(ctx, base);
+    if (noctis_trace && ctx.r[3]) {
+        const uint32_t row = ctx.r[3];
+        std::fprintf(stderr,"noctis-air SELECT player=%08X frame=%u buttons=%08X mode=%08X target=%u window=%u-%u start=%u\n",
+            player,load(player+kPlayerFrame),load(row+4),load(load(row+12)),load16(row+28),
+            load(row+16),load(row+20),load(row+24));
+    }
+    if (trace && ctx.r[3]) {
+        const uint32_t row = ctx.r[3];
+        std::fprintf(stderr, "eliza-assist SELECT player=%08X name=%s frame=%u row=%08X dir=%08X buttons=%08X mode=%08X target=%u held=%08X lock=%u\n",
+                     player, assist_move_name(player), load(player + kPlayerFrame), row, load(row), load(row + 4),
+                     load(load(row + 12)), load16(row + 28), load(player + 0x7f0), load(player + 0x800));
+    }
 }
 
 PPC_FUNC(sub_04336854_orig);
+namespace {
+void correct_noctis_assault_exit(uint32_t player) {
+    const int slot = player ? slot_of_id(load(player + kPlayerSelectId)) : -1;
+    if (slot < 0 || !noctis_assault::exit_move(g_added[slot].code, damage_move_name(player))) return;
+    const uint32_t partner = load(player + 0xac), opponent = load(player + 0x98);
+    if (!partner || !opponent || partner == opponent) return;
+    noctis_assault::Position position{loadf(player), loadf(player + 8)};
+    if (noctis_assault::keep_partner_side(position,
+            {loadf(partner),loadf(partner + 8)}, {loadf(opponent),loadf(opponent + 8)})) {
+        storef(player,position.x);
+        storef(player + 8,position.z);
+    }
+}
+} // namespace
+
+// A player's projectiles: 24 slots of 96 bytes at +7968 (sub_041CE354
+// initialises one, sub_041CED84 runs it every frame, sub_041CE254 frees it):
+// +0 its place, +16 its speed (f32 x y z, a frame), +32 -1 when free, +40
+// the hits it has left, +44 its frames left (at 0 it ends), +60 its row
+// (+8 / +12 forward / up speed, +28 its radius).
+constexpr uint32_t kProjectileSlots = 7968, kProjectileSlotSize = 96, kProjectileSlotCount = 24;
+constexpr uint32_t kProjectileVy = 20, kProjectileFree = 32, kProjectileLife = 44, kProjectileRow = 60;
+constexpr uint32_t kRowForward = 8, kRowUp = 12, kRowRadius = 28;
+constexpr uint32_t kPlayerFloor = 72; // player: f32 the floor's height
+
+// An added fighter's projectile flying down ends where it meets the floor
+// (Tekken 7's missiles do; TTT2's fly on through it for their whole life):
+// its frames left set to 1, so that it ends the way it would at its life's end.
+void end_projectiles_at_floor(uint32_t player) {
+    const float floor = loadf(player + kPlayerFloor);
+    for (uint32_t k = 0; k < kProjectileSlotCount; ++k) {
+        const uint32_t slot = player + kProjectileSlots + kProjectileSlotSize * k;
+        const uint32_t row = load(slot + kProjectileRow);
+        if (load(slot + kProjectileFree) == 0xFFFFFFFF || row == 0 || !(loadf(slot + kProjectileVy) < 0.0f)) continue;
+        const float radius = static_cast<float>(static_cast<int32_t>(load(row + kRowRadius)));
+        if (loadf(slot + 4) - radius <= floor && static_cast<int32_t>(load(slot + kProjectileLife)) > 1) {
+            store(slot + kProjectileLife, 1);
+            if (std::getenv("TTT2_TRACE_PROJECTILES"))
+                std::fprintf(stderr, "ttt2: projectile %08X ends at the floor\n", slot);
+        }
+    }
+}
+
 PPC_FUNC(sub_04336854) { // a fighter's physics, once a frame (r3; it recurses into the objects at +164, +168)
     const uint32_t player = ctx.r[3];
+    if (g_active && (ctx.lr < 0x04336854 || ctx.lr >= 0x0433AF5C) && slot_of_id(load(player + kPlayerSelectId)) >= 0)
+        end_projectiles_at_floor(player);
+    finish_special_assist(ctx, base, player);
+    trace_eliza_move(player);
+    trace_noctis_air_step(player);
     const bool own = ctx.lr < 0x04336854 || ctx.lr >= 0x0433AF5C;
+    if (own) trace_assist_follow(player);
     const auto it = own ? g_arcs.find(player) : g_arcs.end();
     if (it == g_arcs.end() || it->second.mode == Arc2D::kNone) {
         sub_04336854_orig(ctx, base);
+        if (own) correct_noctis_assault_exit(player);
         return;
     }
     Arc2D& s = it->second;
-    if (s.mode == Arc2D::kPhysics) {
+    // An air move hangs where it is until it has thrown its projectile, as Tekken 7's air fireball does (thrown
+    // right after the take-off it comes out just above the floor; falling on, one started late in the jump landed
+    // well before its throw): TTT2's gravity step leaves it still (vy = its gravity, which the step takes off).
+    const float hang_y = loadf(player + kPlayerY);
+    const bool hangs = s.mode == Arc2D::kPhysics && hang_y > 0.0f && load(player + kPlayerMove) == s.move &&
+                       throws_after(s.move, static_cast<int32_t>(load(player + kPlayerFrame)));
+    if (hangs) {
+        storef(player + kPlayerVy, kTitleGravity * slow_motion(player));
+        if (std::getenv("TTT2_TRACE_PROJECTILES"))
+            std::fprintf(stderr, "ttt2: %08X hangs at %.0f mm at frame %u, to throw\n", player, hang_y,
+                         load(player + kPlayerFrame));
+    } else if (s.mode == Arc2D::kPhysics) {
         const uint32_t mode = load(player + kPlayerGravityMode);
         if ((mode == 0 || mode == 2) && loadf(player + kPlayerY) > 0.0f && load8(player + kPlayerHover) == 0)
             storef(player + kPlayerVy, loadf(player + kPlayerVy) - (s.g - kTitleGravity) * slow_motion(player));
     }
     sub_04336854_orig(ctx, base);
+    if (own) correct_noctis_assault_exit(player);
     const uint32_t move = load(player + kPlayerMove);
+    if (hangs && move == s.move) storef(player + kPlayerY, hang_y), storef(player + kPlayerVy, 0.0f);
     if (s.mode == Arc2D::kBaked) {
         if (move == s.move) {
             s.n = static_cast<int32_t>(load(player + kPlayerFrame)) - s.f0;
@@ -3529,7 +4240,12 @@ PPC_FUNC(sub_08BF4D44) {
 // player) initialises one of the player's slots: + 7968, 96 bytes each,
 // position at +0, +32 -1 when free, row +60), follows it every frame and goes
 // out of sight (far below the stage) when the projectile is gone (a hit, the
-// end of its life), so that it ends where the projectile does.
+// end of its life), so that it ends where the projectile does. Tekken 7 turns
+// its missile to the way it flies: the look's ahead is the projectile's way
+// from frame to frame (Akuma's air fireball, down and ahead), level
+// sideways; before the projectile has moved, the way its row gives (the
+// effect library gives a particle the emitter's frame when it is spawned,
+// and the look's bodies are spawned in its first frame).
 //
 // Tekken 7 places some emitters from the floor's height rather than the bone's
 // (ground smoke, a low wave): the converter puts them in a second file of the
@@ -3537,29 +4253,71 @@ PPC_FUNC(sub_08BF4D44) {
 constexpr uint32_t kLevelMark = 0x54374658, kLevelMarkAt = 700;       // "T7FX"
 constexpr uint32_t kProjectileMark = 0x50524F4A, kProjectileMarkAt = 704; // "PROJ"
 constexpr uint32_t kFloorMark = 0x464C4F52, kFloorMarkAt = 708;           // "FLOR"
-constexpr uint32_t kPlayerFloor = 72;                                      // player: f32 the floor's height
 constexpr uint32_t kEffectFile = 932, kEffectPlayer = 720;      // effect object: its loaded file, its slot
 constexpr uint32_t kRigBones = 32, kBoneLocal = 0, kBoneWorld = 64; // sub_04E1A518's model: its bone records
-constexpr uint32_t kProjectileFree = 32, kProjectileRow = 60;
 constexpr float kOutOfSight = -100000.0f;
 struct ProjectileLook {
     uint32_t file, owner, slot, row; // owner: the effect's player slot (+720) the projectile was looked up for
     float before[3]; // the slot's place when the look started (its last projectile's until the first update)
     bool moved;
+    float last[3] = {}, way[3] = {}; // its place last seen and the way it went from there (none yet: 0)
 };
 std::map<uint32_t, uint32_t> g_last_projectile;    // player -> the slot initialised last
+std::map<uint32_t, std::chrono::steady_clock::time_point> g_projectile_thrown; // player -> when
 std::map<uint32_t, ProjectileLook> g_projectile_looks; // effect object -> the projectile it rides
+
+// An effect started with a projectile (spawned on its frame: Akuma's air
+// fireball's flash) turns, whole, to the projectile's path, pitched about its
+// left as the projectile flies up or down: Tekken 7 sets such an effect on
+// the throwing hand, made for the throw's way.
+struct EffectPitch {
+    uint32_t owner;
+    std::chrono::steady_clock::time_point start;
+    float pitch; // radians, up positive
+    bool settled;
+};
+std::map<uint32_t, EffectPitch> g_effect_pitches; // effect object -> its pitch
+constexpr auto kThrownWith = std::chrono::milliseconds(150); // an effect this near a throw is the throw's
+
+float effect_pitch(PPCContext& ctx, uint8_t* base, uint32_t effect) {
+    const uint32_t owner = load(effect + kEffectPlayer);
+    const auto now = std::chrono::steady_clock::now();
+    auto it = g_effect_pitches.find(effect);
+    if (it == g_effect_pitches.end() || it->second.owner != owner)
+        it = g_effect_pitches.insert_or_assign(effect, EffectPitch{owner, now, 0.0f, false}).first;
+    EffectPitch& e = it->second;
+    if (e.settled) return e.pitch;
+    // The projectile may be thrown a frame or two after the effect starts: looked for until kThrownWith.
+    const uint32_t player = guest_call(ctx, base, sub_05C5EF74, {owner});
+    const auto thrown = g_projectile_thrown.find(player);
+    const auto slot = g_last_projectile.find(player);
+    if (thrown != g_projectile_thrown.end() && slot != g_last_projectile.end() &&
+        thrown->second > e.start - kThrownWith && thrown->second < e.start + kThrownWith) {
+        const uint32_t row = load(slot->second + kProjectileRow);
+        const auto ahead = row ? static_cast<float>(static_cast<int32_t>(load(row + kRowForward))) : 0.0f;
+        const auto up = row ? static_cast<float>(static_cast<int32_t>(load(row + kRowUp))) : 0.0f;
+        if (up != 0.0f) e.pitch = std::atan2(up, ahead);
+        e.settled = true;
+        if (std::getenv("TTT2_TRACE_PROJECTILES"))
+            std::fprintf(stderr, "ttt2: effect %08X thrown with %08X (%+.0f ms): pitch %.1f deg\n", effect,
+                         slot->second, std::chrono::duration<double, std::milli>(thrown->second - e.start).count(),
+                         e.pitch * 57.29578f);
+    } else if (now - e.start > kThrownWith) {
+        e.settled = true;
+    }
+    return e.pitch;
+}
 
 // sub_08BE5650(effect, file, ...): the library sets an effect object up for a new effect (objects are reused).
 PPC_FUNC(sub_08BE5650_orig);
 PPC_FUNC(sub_08BE5650) {
-    if (g_active) g_projectile_looks.erase(ctx.r[3]);
+    if (g_active) g_projectile_looks.erase(ctx.r[3]), g_effect_pitches.erase(ctx.r[3]);
     sub_08BE5650_orig(ctx, base);
 }
 
 PPC_FUNC(sub_041CE354_orig);
 PPC_FUNC(sub_041CE354) {
-    if (g_active) g_last_projectile[ctx.r[5]] = ctx.r[3];
+    if (g_active) g_last_projectile[ctx.r[5]] = ctx.r[3], g_projectile_thrown[ctx.r[5]] = std::chrono::steady_clock::now();
     sub_041CE354_orig(ctx, base);
 }
 
@@ -3585,7 +4343,22 @@ bool projectile_look_place(PPCContext& ctx, uint8_t* base, uint32_t effect, uint
         for (int i = 0; i < 3; ++i) at[i] = loadf(slot + 4 * i);
         l.moved = l.moved || at[0] != l.before[0] || at[1] != l.before[1] || at[2] != l.before[2];
         if (l.moved) std::copy(at, at + 3, place); // (until then the body part's place)
+        const float d[3] = {at[0] - l.last[0], at[1] - l.last[1], at[2] - l.last[2]};
+        const float n = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (l.moved && n > 1e-3f && n < 500) // (a step, not its first place)
+            for (int i = 0; i < 3; ++i) l.way[i] = d[i] / n;
+        if (std::getenv("TTT2_TRACE_PROJECTILES") && n > 1e-3f) {
+            const uint32_t player = guest_call(ctx, base, sub_05C5EF74, {owner});
+            std::fprintf(stderr, "ttt2: projectile look %08X at %.0f %.0f %.0f way %.2f %.2f %.2f (its fighter at %.0f %.0f %.0f, the opponent at %.0f %.0f)\n",
+                         effect, at[0], at[1], at[2], l.way[0], l.way[1], l.way[2], player ? loadf(player) : 0.0f,
+                         player ? loadf(player + 4) : 0.0f, player ? loadf(player + 8) : 0.0f,
+                         player && load(player + 0x98) ? loadf(load(player + 0x98)) : 0.0f,
+                         player && load(player + 0x98) ? loadf(load(player + 0x98) + 8) : 0.0f);
+        }
+        std::copy(at, at + 3, l.last);
     } else {
+        if (l.slot && std::getenv("TTT2_TRACE_PROJECTILES"))
+            std::fprintf(stderr, "ttt2: projectile look %08X: its projectile is gone\n", effect);
         l.slot = 0; // gone: never again, even when the slot is used anew
         place[1] = kOutOfSight;
     }
@@ -3642,6 +4415,7 @@ PPC_FUNC(sub_08BE56E4) {
             floor_place(ctx, base, effect, file, place);
             static const uint32_t level = system_alloc(64);
             for (int i = 0; i < 12; ++i) store(level + 4 * i, load(matrix + 4 * i)); // (no model: the bone's axes)
+            bool levelled = false; // the level facing frame replaced the bone's axes
             if (const uint32_t hips = effect_hips(ctx, base, effect)) {
                 float ahead[3] = {0, 0, 0}; // the root's z row: sum over k of L[k][2] W[k]
                 for (int k = 0; k < 3; ++k) {
@@ -3653,6 +4427,55 @@ PPC_FUNC(sub_08BE56E4) {
                     const float x = ahead[0] / n, z = ahead[2] / n;
                     const float rows[12] = {z, 0, -x, 0, 0, 1, 0, 0, x, 0, z, 0}; // left = up x ahead, up, ahead
                     for (int i = 0; i < 12; ++i) storef(level + 4 * i, rows[i]);
+                    levelled = true;
+                }
+            }
+            // An effect thrown with a projectile: pitched to its path.
+            if (load(file + kProjectileMarkAt) != kProjectileMark) {
+                if (const float pitch = effect_pitch(ctx, base, effect); pitch != 0.0f) {
+                    const float c = std::cos(pitch), s = std::sin(pitch);
+                    float ahead[3], up[3];
+                    for (int i = 0; i < 3; ++i) {
+                        const float a = loadf(level + 32 + 4 * i), u = loadf(level + 16 + 4 * i);
+                        ahead[i] = a * c + u * s;
+                        up[i] = u * c - a * s;
+                    }
+                    for (int i = 0; i < 3; ++i) storef(level + 16 + 4 * i, up[i]), storef(level + 32 + 4 * i, ahead[i]);
+                }
+            }
+            // A projectile's look: ahead its way, left level, up = ahead x left. The way is seen once the
+            // projectile has moved (the look's third frame); before that it is the way the projectile's row gives
+            // (its forward and up speeds along the level facing): the look's one-shot bodies (Akuma's egg, rings
+            // and swirls), spawned in its first frame and living as long as the projectile, keep the frame they
+            // were spawned in.
+            const auto look = g_projectile_looks.find(effect);
+            float a[3] = {0, 0, 0};
+            if (look != g_projectile_looks.end() && look->second.slot) {
+                std::copy(look->second.way, look->second.way + 3, a);
+                if (levelled && a[0] == 0 && a[1] == 0 && a[2] == 0 && look->second.row) {
+                    const auto forward = static_cast<float>(static_cast<int32_t>(load(look->second.row + kRowForward)));
+                    const auto up = static_cast<float>(static_cast<int32_t>(load(look->second.row + kRowUp)));
+                    if (const float n = std::sqrt(forward * forward + up * up); up != 0 && n > 0) {
+                        for (int i = 0; i < 3; ++i)
+                            a[i] = (loadf(level + 32 + 4 * i) * forward + loadf(level + 16 + 4 * i) * up) / n;
+                        if (std::getenv("TTT2_TRACE_PROJECTILES"))
+                            std::fprintf(stderr, "ttt2: projectile look %08X: way from its row %.2f %.2f %.2f\n",
+                                         effect, a[0], a[1], a[2]);
+                    }
+                }
+            }
+            if (a[1] != 0) {
+                float left[3] = {a[2], 0, -a[0]};
+                const float n = std::sqrt(left[0] * left[0] + left[2] * left[2]);
+                if (n > 1e-3f) {
+                    left[0] /= n, left[2] /= n;
+                    const float up[3] = {a[1] * left[2] - a[2] * left[1], a[2] * left[0] - a[0] * left[2],
+                                         a[0] * left[1] - a[1] * left[0]};
+                    for (int i = 0; i < 3; ++i) {
+                        storef(level + 4 * i, left[i]);
+                        storef(level + 16 + 4 * i, up[i]);
+                        storef(level + 32 + 4 * i, a[i]);
+                    }
                 }
             }
             for (int i = 0; i < 3; ++i) storef(level + 48 + 4 * i, place[i]);

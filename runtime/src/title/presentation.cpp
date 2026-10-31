@@ -11,7 +11,7 @@
 #include "title/text.h"
 #include "title/title_screen.h"
 
-#include <openssl/evp.h>
+#include "host/digest.h"
 
 #include <algorithm>
 #include <array>
@@ -62,19 +62,8 @@ std::optional<std::vector<uint8_t>> game_entry(const char* archive, uint32_t has
 
 std::array<uint8_t, 16> md5_of(const uint8_t* data, size_t size) {
     std::array<uint8_t, 16> md5{};
-    unsigned int length = 0;
-    EVP_Digest(data, size, md5.data(), &length, EVP_md5(), nullptr);
+    md5 = host::digest<16>(std::span(data, size));
     return md5;
-}
-
-void replace_texture(const ntp3::Texture& original, std::function<const std::vector<uint8_t>*()> contents) {
-    gpu::TextureReplacement r;
-    r.width = original.width;
-    r.height = original.height;
-    r.format = original.gx2_format();
-    r.md5 = md5_of(original.data.data(), original.level0_size());
-    r.contents = std::move(contents);
-    gpu::add_texture_replacement(std::move(r));
 }
 
 // ------------------------------------------------------------------ the controller
@@ -488,6 +477,18 @@ void prepare_title_screen() {
 void system_info_created(uint32_t info) {
     g_system_info = info;
     apply_confirm_button();
+}
+
+std::optional<std::vector<uint8_t>> game_file(const char* archive, uint32_t hash) { return game_entry(archive, hash); }
+
+void replace_texture(const ntp3::Texture& original, std::function<const std::vector<uint8_t>*()> contents) {
+    gpu::TextureReplacement r;
+    r.width = original.width;
+    r.height = original.height;
+    r.format = original.gx2_format();
+    r.md5 = md5_of(original.data.data(), original.level0_size());
+    r.contents = std::move(contents);
+    gpu::add_texture_replacement(std::move(r));
 }
 
 void prepare_presentation() {

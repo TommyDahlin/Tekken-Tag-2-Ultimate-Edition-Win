@@ -113,7 +113,7 @@ int translate_all(const std::filesystem::path& directory, const char* out_dir) {
     std::map<std::string, int> errors;
     int draws = 0, failures = 0;
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        const std::string name = entry.path().filename();
+        const std::string name = entry.path().filename().string();
         if (entry.path().extension() != ".regs") continue;
         // draw_<vs>_<ps>_<fs>.regs
         const std::string vs = name.substr(5, 16), ps = name.substr(22, 16), fs = name.substr(39, 16);

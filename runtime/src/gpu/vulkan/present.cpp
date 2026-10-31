@@ -1,3 +1,4 @@
+#include <pthread.h>
 // Presentation: finished frames go to the window from a thread of their own.
 //
 // The command processor copies the TV scan buffer into one of a few
@@ -187,7 +188,7 @@ uint32_t Renderer::take_present_image() {
         for (uint32_t i = 0; i < kPresentImages; ++i) {
             present_images_.push_back(create_image(format, VK_IMAGE_ASPECT_COLOR_BIT, scan.width, scan.height, 1, 1,
                                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                                       VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                                                    VK_IMAGE_VIEW_TYPE_2D, compute_present_));
         }
         present_free_.assign(kPresentImages, 1);
@@ -207,8 +208,8 @@ uint32_t Renderer::take_present_image() {
     return i;
 }
 
-// Copies the TV scan buffer into a presentation image; `ready` is the
-// timeline value at which the copy has finished.
+// Copies the TV scan buffer into a presentation image, with the overlay
+// over it; `ready` is the timeline value at which the copy has finished.
 uint32_t Renderer::copy_scan_to_present_image(uint64_t& ready) {
     const uint32_t i = take_present_image();
     end_rendering();
@@ -219,6 +220,13 @@ uint32_t Renderer::copy_scan_to_present_image(uint64_t& ready) {
     region.extent = {scan_[0].width, scan_[0].height, 1};
     vkCmdCopyImage(cmd(), scan_[0].image, VK_IMAGE_LAYOUT_GENERAL, present_images_[i].image, VK_IMAGE_LAYOUT_GENERAL, 1,
                    &region);
+    draw_overlay(present_images_[i]);
+    if (overlay_capture_ >= 0) { // the TV capture again, as shown
+        char name[64];
+        std::snprintf(name, sizeof(name), "/tv_%04u.png", static_cast<uint32_t>(overlay_capture_));
+        save_image(present_images_[i], std::string(std::getenv("TTT2_CAPTURE")) + name);
+        overlay_capture_ = -1;
+    }
     ready = submit(false);
     last_image_ready_ = ready;
     return i;
