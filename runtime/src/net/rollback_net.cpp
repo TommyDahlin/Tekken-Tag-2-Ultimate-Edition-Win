@@ -458,6 +458,7 @@ struct RollbackNetSession::Impl {
 
     DtlsState dtls {};
     bool dtls_ready = false;
+    uint64_t last_punch_ms = 0;
 
     uint32_t local_seq = 1;
     uint32_t remote_latest_seq = 0;
@@ -595,6 +596,21 @@ struct RollbackNetSession::Impl {
         if ((remote_recv_mask & bit) != 0) return false;
         remote_recv_mask |= bit;
         return true;
+    }
+
+    // A datagram of no meaning, sent while the DTLS handshake is pending. The
+    // server end of a handshake sends nothing until a ClientHello arrives, and
+    // a router drops what reaches it before anything was sent out from behind
+    // it: this opens the way both ways. It is shorter than a DTLS record
+    // header, which DTLS discards without a word.
+    void send_punch() {
+        static constexpr char kPunch[4] = {'T', 'T', 'T', '2'};
+        if (use_connected_socket) {
+            (void)send(socket_fd, kPunch, sizeof(kPunch), 0);
+        } else {
+            (void)sendto(socket_fd, kPunch, sizeof(kPunch), 0, reinterpret_cast<const sockaddr*>(&remote_addr),
+                         remote_addr_len);
+        }
     }
 
     void send_packet(uint8_t type, uint32_t frame, std::span<const uint8_t> payload, uint64_t now_ms,
@@ -822,6 +838,11 @@ void RollbackNetSession::update(uint64_t now_ms) {
             m_impl->last_receive_ms = now_ms;
             m_impl->last_send_ms = now_ms;
         } else {
+            constexpr uint64_t kPunchEveryMs = 250;
+            if (now_ms - m_impl->last_punch_ms >= kPunchEveryMs) {
+                m_impl->last_punch_ms = now_ms;
+                m_impl->send_punch();
+            }
             return;
         }
     }

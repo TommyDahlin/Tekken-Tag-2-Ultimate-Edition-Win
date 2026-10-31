@@ -10,6 +10,15 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace {
 
 namespace net = cafe::net;
@@ -75,12 +84,64 @@ void exchange(bool dtls, uint16_t port_a, uint16_t port_b) {
     check(server.stats().packets_sent > 0 && client.stats().packets_received > 0, mode + ": packets counted");
 }
 
+// While its handshake is pending, a session sends the peer a small datagram of
+// no meaning, so that a router lets the peer's handshake in (the DTLS server
+// would otherwise send nothing until a ClientHello reaches it).
+void handshake_sends_punches(bool dtls_server) {
+    const std::string mode = "punch";
+    constexpr uint16_t kSession = 31020, kListener = 31021;
+    net::RollbackNetConfig config;
+    config.enable_dtls = true;
+    net::RollbackNetSession session;
+    check(session.start(config, "127.0.0.1", kListener, kSession, "ttt2", "ttt2-rollback", dtls_server),
+          mode + ": session starts");
+
+#if defined(_WIN32)
+    using Socket = SOCKET;
+    const Socket invalid = INVALID_SOCKET;
+#else
+    using Socket = int;
+    const Socket invalid = -1;
+#endif
+    Socket listener = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    check(listener != invalid, mode + ": listener opens");
+    if (listener == invalid) return;
+    sockaddr_in address {};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(kListener);
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+    check(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, mode + ": listener binds");
+#if defined(_WIN32)
+    const DWORD timeout = 50;
+    setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+    const timeval timeout{0, 50000};
+    setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#endif
+
+    bool punched = false;
+    const auto deadline = Clock::now() + std::chrono::seconds(2);
+    while (!punched && Clock::now() < deadline) {
+        session.update(now_ms());
+        char buffer[64];
+        const int received = static_cast<int>(recv(listener, buffer, sizeof(buffer), 0));
+        punched = received == 4 && std::string(buffer, 4) == "TTT2";
+    }
+    check(punched, mode + ": a datagram arrives before any handshake reply");
+#if defined(_WIN32)
+    closesocket(listener);
+#else
+    close(listener);
+#endif
+}
+
 } // namespace
 
 int main() {
     exchange(false, 31010, 31011);
     if (cafe::net::dtls_available()) {
         exchange(true, 31012, 31013);
+        handshake_sends_punches(true);
     } else {
         std::printf("rollback_net_test: no OpenSSL in this build, DTLS skipped\n");
     }

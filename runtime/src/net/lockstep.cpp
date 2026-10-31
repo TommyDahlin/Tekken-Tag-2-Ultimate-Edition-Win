@@ -75,8 +75,17 @@ bool Lockstep::sync_point(bool ready) {
         const uint64_t now = now_ms();
         if (now - last_said >= 3000) {
             last_said = now;
-            std::fprintf(stderr, "ttt2: lockstep: at the sync point, waiting for the other player (%llu ms)\n",
-                         static_cast<unsigned long long>(now - began));
+            const RollbackNetStats& stats = m_session.stats();
+            std::fprintf(stderr, "ttt2: lockstep: at the sync point, waiting for the other player (%llu ms; %s; "
+                                 "sent %u, received %u)\n",
+                         static_cast<unsigned long long>(now - began),
+                         m_session.is_connected() ? "connected" : "no connection yet", stats.packets_sent,
+                         stats.packets_received);
+            if (!m_session.is_connected() && now - began >= 9000 && now - began < 12000) {
+                std::fprintf(stderr, "ttt2: lockstep: nothing from the other player has arrived: check its address and "
+                                     "port, the firewall (UDP), port forwarding on the host's router, and that both "
+                                     "players have encryption on, or both off, with the same secret\n");
+            }
         }
         std::this_thread::sleep_for(std::chrono::microseconds(250));
         m_session.update(now_ms());
