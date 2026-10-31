@@ -244,7 +244,8 @@ def add(args, fighters, progress):
         # that the packs are never left with what they shared before, without the fighters added now
         tekken7, tekken8 = shared_games(folder, tekken7, tekken8, progress)
     if fighters:
-        fighters = tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=not tekken8_fighters)
+        fighters = tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=not tekken8_fighters,
+                                 attach_running=getattr(args, 'attach_running', False))
     movesets8 = None
     unsaved8 = {}
     if tekken8_fighters:
@@ -331,7 +332,7 @@ def shared_games(folder, tekken7, tekken8, progress):
     return tekken7, tekken8
 
 
-def tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=True):
+def tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=True, attach_running=False):
     """The Tekken 7 fighters that can be imported: owned (DLC fighters: as Steam tells), their movesets and
     encrypted files saved (Tekken 7 runs hidden for those not saved yet). alone: no other fighter is imported (none of
     them left fails)."""
@@ -343,7 +344,7 @@ def tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=Tru
     if any(fid in autodump.DLC for fid in ids):
         progress('step', 'dump', 'Asking Steam which DLC you own (a helper runs hidden in Tekken 7\'s Proton prefix)')
     try:
-        skipped = autodump.unowned(ids, allow_running=args.attach_running)
+        skipped = autodump.unowned(ids, allow_running=attach_running)
     except autodump.DumpError as error:
         progress.fail(str(error))
     for fighter in list(fighters):
@@ -378,7 +379,7 @@ def tekken7_ready(fighters, tekken7, movesets, files_folder, progress, alone=Tru
         progress('step', 'dump', 'Saving what Tekken 7 has only while it runs (it runs hidden in the background for a '
                  'minute or two)')
         try:
-            _, skipped = autodump.dump(needed, movesets, files=files, paks=paks, attach_running=args.attach_running)
+            _, skipped = autodump.dump(needed, movesets, files=files, paks=paks, attach_running=attach_running)
         except autodump.DumpError as error:
             progress.fail(str(error))
         who = {fid: name for fid, (_, name) in needed.items()}
