@@ -131,8 +131,8 @@ def default_locations(root: Path, portable: Path | None = None) -> dict[str, str
 
     `root` is the source folder (this script's parent); `portable` is the root of a
     portable install (portable_root()), which decides when there is one."""
-    exe_names = ("ttt2.exe", "ttt2")
-    candidates = [root / "portable" / "ttt2-portable", root / "build-ucrt64-tools-ucrt64", root / "build"]
+    exe_names = ("ttt2-ultimate.exe", "ttt2.exe", "ttt2")
+    candidates = [root / "portable" / "ttt2-portable", root / "build-windows-tools", root / "build-ucrt64-tools-ucrt64", root / "build"]
     if portable is not None:
         candidates.insert(0, portable / "app")
     exe = ""
