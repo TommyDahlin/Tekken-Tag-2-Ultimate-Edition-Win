@@ -40,6 +40,9 @@ struct RollbackNetStats {
     uint32_t local_input_delay_frames = 1;
 };
 
+// False in a build without OpenSSL: sessions must then start with enable_dtls off.
+bool dtls_available();
+
 class RollbackNetSession {
   public:
     RollbackNetSession();

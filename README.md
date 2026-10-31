@@ -134,6 +134,10 @@ On Arch Linux:
 sudo pacman -S --needed base-devel git cmake ninja clang python zstd zlib openssl vulkan-headers vulkan-icd-loader sdl3 shaderc gtk4 mingw-w64-gcc
 ```
 
+`tools/setup_dev_linux.sh` does this for Arch, Debian/Ubuntu, Fedora and
+openSUSE (it installs the packages, runs `tools/setup_deps.py` and checks the
+SDL and Vulkan header versions; `--build` also builds and runs the tests).
+
 Other distributions package the same libraries under similar names; older
 releases such as Ubuntu 24.04 and Debian 12 ship SDL and Vulkan headers that
 are too old.
@@ -707,6 +711,12 @@ lockstep = yes          # frame-locked: both games get the same inputs (recommen
 delay = 3               # input delay in frames, 1 to 30; raise it for a slow connection
 dtls = yes              # encrypted; both players must use the same psk_id/psk_secret
 ```
+
+Encryption (`dtls = yes`) needs a build with OpenSSL, which Linux builds always
+have. The Windows build made by Set Up Game has none unless OpenSSL 3 is found
+when it is configured; without it the game refuses to start netplay with
+encryption on, so both players then set `dtls = no` (the launcher's encryption
+option).
 
 The host is player 1 on both machines. Start both games at about the same
 time: both send to each other, which opens the way through most home routers

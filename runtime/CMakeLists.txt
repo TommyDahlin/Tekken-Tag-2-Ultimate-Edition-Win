@@ -1,5 +1,11 @@
 set(TTT2_INSTALL_SOURCE src/install.cpp)
-find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
+# Netplay's DTLS needs OpenSSL. Windows' own tools do not ship it, so there
+# the game builds without it (netplay then only runs unencrypted).
+if(WIN32)
+    find_package(OpenSSL 3 COMPONENTS Crypto SSL)
+else()
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
+endif()
 find_package(ZLIB REQUIRED)
 
 # Linked as objects, not an archive: strong import implementations here must
@@ -87,8 +93,14 @@ if(WIN32)
 else()
     find_library(SHADERC_LIBRARY NAMES shaderc_shared REQUIRED)
 endif()
-target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title OpenSSL::Crypto OpenSSL::SSL ZArchive::zarchive amd_addrlib cafe_latte
+target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title ZArchive::zarchive amd_addrlib cafe_latte
     Vulkan::Vulkan SDL3::SDL3 ${SHADERC_LIBRARY})
+if(OPENSSL_FOUND)
+    target_link_libraries(cafe_runtime PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+else()
+    message(STATUS "OpenSSL not found: netplay is built without DTLS")
+    target_compile_definitions(cafe_runtime PRIVATE TTT2_NO_OPENSSL)
+endif()
 # Vulkan structures are initialised with only their sType.
 target_compile_options(cafe_runtime PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
 

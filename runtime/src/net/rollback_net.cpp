@@ -11,8 +11,10 @@
 #include <optional>
 #include <unordered_map>
 
+#ifndef TTT2_NO_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#endif
 
 #if defined(_WIN32)
 #include <WinSock2.h>
@@ -36,6 +38,15 @@ constexpr SocketHandle kInvalidSocket = -1;
 #endif
 
 namespace cafe::net {
+
+bool dtls_available() {
+#ifdef TTT2_NO_OPENSSL
+    return false;
+#else
+    return true;
+#endif
+}
+
 namespace {
 
 constexpr uint32_t kMagic = 0x52524E31; // RRN1
@@ -269,6 +280,7 @@ bool decode_packet(std::span<const uint8_t> packet, PacketHeader& out_header, st
     return true;
 }
 
+#ifndef TTT2_NO_OPENSSL
 class DtlsState {
   public:
     ~DtlsState() { reset(); }
@@ -413,6 +425,21 @@ class DtlsState {
     std::vector<uint8_t> m_psk_identity;
     std::vector<uint8_t> m_psk_secret;
 };
+#else
+// Built without OpenSSL: no DTLS, and start() refuses to run with it on.
+class DtlsState {
+  public:
+    bool init(bool, SocketHandle, const sockaddr_storage&, std::span<const uint8_t>, std::span<const uint8_t>) {
+        return false;
+    }
+    bool do_handshake() { return false; }
+    bool established() const { return false; }
+    int read(uint8_t*, int) { return -1; }
+    int write(const uint8_t*, int) { return -1; }
+    bool last_error_would_block(int) const { return false; }
+    void reset() {}
+};
+#endif
 
 } // namespace
 
@@ -748,6 +775,13 @@ bool RollbackNetSession::start(const RollbackNetConfig& config, const std::strin
     m_impl->stats.local_input_delay_frames = std::max<uint8_t>(1, config.base_input_delay_frames);
     m_impl->is_server = is_server;
 
+#ifdef TTT2_NO_OPENSSL
+    if (config.enable_dtls) {
+        std::fprintf(stderr, "ttt2: rollback net: this build has no OpenSSL, so no DTLS: turn encryption off on "
+                             "both sides (TTT2_NET_DTLS=0 or dtls = no) or use a build with OpenSSL\n");
+        return false;
+    }
+#endif
     if (!m_impl->open_udp(remote_host, remote_port, local_port, true)) return false;
 
     m_impl->started = true;

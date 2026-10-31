@@ -79,7 +79,11 @@ void exchange(bool dtls, uint16_t port_a, uint16_t port_b) {
 
 int main() {
     exchange(false, 31010, 31011);
-    exchange(true, 31012, 31013);
+    if (cafe::net::dtls_available()) {
+        exchange(true, 31012, 31013);
+    } else {
+        std::printf("rollback_net_test: no OpenSSL in this build, DTLS skipped\n");
+    }
     if (g_failures == 0) std::printf("rollback_net_test: ok\n");
     return g_failures == 0 ? 0 : 1;
 }
