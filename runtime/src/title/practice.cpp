@@ -28,6 +28,8 @@
 #include "cafe/ppc_ops.h"
 #include "cafe/runtime.h"
 #include "cafe/sysmem.h"
+#include "title/fight_trace.h"
+#include "title/rollback_selftest.h"
 
 #include <algorithm>
 #include <chrono>
@@ -606,8 +608,9 @@ PPC_FUNC(sub_0726DF8C) {
         if (reverse) call(ctx, base, sub_05FBC0A4, {camera, k2PCamera, 1}, 1.0);
         title::framedata::reset();
     }
-    sub_0726DF8C_orig(ctx, base);
+    if (!ttt2::title::rollback_selftest_frame(ctx, base, sub_0726DF8C_orig)) sub_0726DF8C_orig(ctx, base);
     title::gauge::battle_frame(base);
+    ttt2::title::trace_fight_frame();
 }
 
 

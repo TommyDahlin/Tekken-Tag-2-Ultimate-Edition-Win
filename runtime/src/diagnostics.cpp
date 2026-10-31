@@ -1,6 +1,7 @@
 #include "cafe/generated.h"
 #include "cafe/ppc_ops.h"
 #include "cafe/runtime.h"
+#include "title/rollback_selftest.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -56,6 +57,8 @@ LONG WINAPI windows_fault_handler(EXCEPTION_POINTERS* exception) {
     const auto module = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     std::fprintf(stderr, "host executable offset: 0x%llX\n",
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pc) - module));
+    if (ttt2::title::rollback_selftest_running_here())
+        std::fprintf(stderr, "on the thread running the rollback self-test's frames\n");
     if (t_current) print_guest_state(*t_current);
     std::fflush(stderr);
     return EXCEPTION_EXECUTE_HANDLER;

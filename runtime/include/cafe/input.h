@@ -56,4 +56,8 @@ bool take_select_chord();
 void set_input_step(uint32_t every);
 bool input_step_delivered();
 
+// Optional rollback-net-driven input delay recommendation (frames).
+// Nullopt means no network override is active.
+std::optional<uint32_t> rollback_input_delay_frames();
+
 } // namespace cafe::os

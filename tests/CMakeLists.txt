@@ -135,6 +135,31 @@ target_compile_options(display_settings_test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME display_settings_test
     COMMAND display_settings_test ${CMAKE_CURRENT_BINARY_DIR}/display_settings_test.d)
 
+# The rollback transport: two sessions on the loopback exchange inputs, plain
+# and over DTLS.
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
+add_executable(rollback_net_test rollback_net_test.cpp ${CMAKE_SOURCE_DIR}/runtime/src/net/rollback_net.cpp)
+target_include_directories(rollback_net_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_features(rollback_net_test PRIVATE cxx_std_20)
+target_link_libraries(rollback_net_test PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+if(WIN32)
+    target_link_libraries(rollback_net_test PRIVATE ws2_32)
+endif()
+target_compile_options(rollback_net_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME rollback_net_test COMMAND rollback_net_test)
+
+# Lockstep: two players on the loopback get the same input at every poll.
+add_executable(lockstep_test lockstep_test.cpp ${CMAKE_SOURCE_DIR}/runtime/src/net/lockstep.cpp
+    ${CMAKE_SOURCE_DIR}/runtime/src/net/rollback_net.cpp)
+target_include_directories(lockstep_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/src)
+target_compile_features(lockstep_test PRIVATE cxx_std_20)
+target_link_libraries(lockstep_test PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+if(WIN32)
+    target_link_libraries(lockstep_test PRIVATE ws2_32)
+endif()
+target_compile_options(lockstep_test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME lockstep_test COMMAND lockstep_test)
+
 # Guest polling loops must see other threads' stores (no Dolphin needed).
 add_executable(memory_model_test memory_model_test.cpp)
 target_include_directories(memory_model_test PRIVATE ${CMAKE_SOURCE_DIR}/runtime/include)
@@ -155,6 +180,11 @@ if(Python3_Interpreter_FOUND)
     else()
         message(STATUS "character_import_test disabled: needs Python 3 with numpy and Pillow")
     endif()
+
+    # The netplay launcher's logic and its window (built, not shown: skipped where
+    # there is no tkinter or no display).
+    add_test(NAME netplay_launcher_test
+        COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tests/netplay_launcher_test.py")
 endif()
 
 # Outfit namespace validation and loader/menu state transitions, without game assets.

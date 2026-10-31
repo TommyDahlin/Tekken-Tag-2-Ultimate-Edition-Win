@@ -4,6 +4,7 @@
 /generated/
 /portable/
 __pycache__/
+/Cemu/*
 *.pyc
 # launcher/appimage/make_appimage.sh's and launcher/windows/make_launcher_exe.py's output
 *.AppImage
@@ -49,6 +50,7 @@ character.ini
 /game/
 /data/
 /characters/
+/movesets/
 /tekken7/
 /.local/
 **/ttt2/characters/

@@ -18,6 +18,8 @@
 #include <mutex>
 #include <pthread.h>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace cafe::os {
 
@@ -76,6 +78,9 @@ Thread* create_internal_thread(const char* name, int core);
 // Makes `t` the current guest thread of the calling host thread.
 void bind_current_thread(Thread* t);
 Thread* thread_for(uint32_t guest_thread); // null for unknown structures
+// The guest memory every guest thread owns: its OSThread structure and its
+// stack, as [begin, end) pairs (what a snapshot of the title must not rewind).
+std::vector<std::pair<uint32_t, uint32_t>> guest_thread_spans();
 
 // Wait channels: a blocked thread sleeps on the channel of the object it
 // waits for, keyed by the object's guest address (or one of the runtime

@@ -92,6 +92,11 @@ Tested on Linux with an AMD GPU (RADV) under KDE Plasma (Wayland). Design
 notes, measurements and milestones are in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+The runtime now also includes an **experimental** low-latency rollback
+network transport foundation in `runtime/src/net/rollback_net.*` (reliable
+UDP packet sequencing with DTLS), prepared for future online/rollback
+integration. It is not wired into gameplay yet.
+
 ## The game
 
 You need **TEKKEN TAG TOURNAMENT 2 Wii U EDITION**, European release, with
@@ -643,9 +648,93 @@ variables below win over it.
 | `TTT2_SAVE_DIR=<folder>` | where saves go |
 | `TTT2_CONTROLLER=playstation/nintendo/xbox` | icons and menu buttons for this kind of controller, whichever is used |
 | `TTT2_CHARACTERS=<folder>` | where character packs are (default `$XDG_DATA_HOME/ttt2/characters`, else `~/.local/share/ttt2/characters`) |
+| `TTT2_NET_ROLLBACK=1` | enables the experimental rollback transport scaffold (`runtime/src/net/rollback_net.*`) |
+| `TTT2_NET_ROLLBACK_PEER=<host>` + `TTT2_NET_ROLLBACK_PORT=<port>` | remote peer host/port for rollback transport (required when `TTT2_NET_ROLLBACK=1`) |
+| `TTT2_NET_ROLLBACK_LOCAL_PORT=<port>` | local UDP port to bind for rollback transport (default: the peer port) |
+| `TTT2_NET_REMOTE_AS_P2=1` | the remote player is the second pad (a Pro Controller on WPAD channel 0); the server's pad is player 1 on both machines, the client's player 2 |
+| `TTT2_NET_LOCKSTEP=1` + `TTT2_NET_DELAY=<frames>` | lockstep: each frame waits for the other player's input, so both games get the same inputs (implies `TTT2_NET_REMOTE_AS_P2`); the input delay is 1-30 frames, default 3 |
+| `TTT2_SKIP_INTRO=<seconds>` | taps A and + (Start) alternately for that many seconds after start-up, to skip the logos and the intro movie (a longer time runs on into the menus and presses what is selected there) |
+| `TTT2_NET_ROLLBACK_SERVER=1` | uses DTLS server handshake mode (client mode by default) |
+| `TTT2_NET_ROLLBACK_NO_DTLS=1` | disables DTLS for transport testing (DTLS is on by default) |
+| `TTT2_NET_ROLLBACK_PROFILE=enet|kcp` | transport profile tuning (`kcp` default) |
+| `TTT2_NET_ROLLBACK_PSK_ID=<id>` / `TTT2_NET_ROLLBACK_PSK_SECRET=<secret>` | DTLS PSK identity/secret (defaults: `ttt2` / `ttt2-rollback`) |
+| `TTT2_NET_USE_REMOTE_INPUT=1` | applies received remote buttons to VPAD input (off by default; local input stays authoritative) |
 
 Debugging variables are listed in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#running-the-port).
+
+### The netplay launcher
+
+`python tools/netplay_launcher.py`
+opens a window with the settings below, so there is no need to type environment
+variables. It needs Python 3 with tkinter (included with Python on Windows;
+`python3-tk` on Linux).
+
+- **Play** chooses *Play on this PC*, *Host a match* or *Join a match*. Each
+  player gets a **code** to copy to the other (it holds the address and the
+  settings that must match, and the game and character packs it was made
+  with): the guest pastes the host's code, the host pastes the guest's code
+  back (it carries the guest's address). A pasted code warns if your game or
+  packs differ from theirs. *Both players are on this PC* starts a test with
+  two windows.
+- **Settings** has the input delay (with a suggestion from your ping), the
+  encryption secret, how to start together, the intro skip, the game's own
+  input delay (both players must match), the second controller as player 2 and
+  full screen.
+- **Files** has the game folder (checked against the supported `Tekken.rpx`),
+  the `ttt2` program and the character packs folder.
+
+**Start the game** runs it with those settings (anything left in your shell's
+`TTT2_NET_*` variables is ignored), shows its messages in the window and a
+one-line status (waiting at the sync point, playing in step, stalled, the other
+player went silent). IP addresses are personal data: the launcher keeps the ones
+you type in memory only unless you tick *Remember addresses*, asks before
+contacting a service to find your public address, and masks addresses in the log
+that *Copy log* copies.
+
+### Playing against another computer (experimental)
+
+Each player puts a `netplay.ini` in the config folder (`%LOCALAPPDATA%\TTT2Ultimate\config\`
+on Windows, `~/.config/ttt2/` or `$XDG_CONFIG_HOME/ttt2/` elsewhere); the `TTT2_NET_*` variables above override it:
+
+```ini
+enabled = yes
+peer = 203.0.113.7      # the other player's address (IP or host name)
+port = 30000            # UDP; both players use this port unless local_port says otherwise
+role = host             # one player "host", the other "join"
+player2 = yes           # the joiner is player 2
+lockstep = yes          # frame-locked: both games get the same inputs (recommended)
+delay = 3               # input delay in frames, 1 to 30; raise it for a slow connection
+dtls = yes              # encrypted; both players must use the same psk_id/psk_secret
+```
+
+The host is player 1 on both machines. Start both games at about the same
+time: both send to each other, which opens the way through most home routers
+(otherwise forward UDP port 30000 to the host). Allow `ttt2.exe` through the
+firewall for private and public networks. `TTT2_NET_TRACE_INPUT=1` prints the
+connection's state every two seconds (`tx`/`rx` rising, `txerr=0`).
+
+With `lockstep = yes` the game asks for the other player's input for every frame
+(its pad poll) and waits for it, so both games always get the same two inputs:
+the host's pad is player 1 and the joiner's player 2, on both machines.
+
+Lockstep starts at a **sync point**, not at boot, so it does not matter how long
+each game takes to load or which one was started first. Each game runs on its
+own until its player reaches the title screen and presses **START** (or, with
+`TTT2_SKIP_INTRO=<seconds>`, until that time is over: the game taps A and START
+through the logos and the intro, then waits at the sync point). When both games
+are there, lockstep begins on the same frame on both machines, and the START
+press goes on to the game and takes effect for both together. Set
+`TTT2_NET_SYNC=now` (`sync = now` in the file) to start at the very first frame. Your
+own input takes effect `delay` frames later, which gives the packets time to
+arrive; a packet that is late stalls the game instead of letting the two
+drift apart. The two games may start at different times (the first waits).
+Without `lockstep` only inputs are sent and the games can drift apart.
+
+Limits: there is no rollback (the stall is the price of a bad connection). The
+game's random numbers are not synchronised yet, so do not pick *Random* for a
+fighter or a stage, and play the same game files and character packs on both
+sides. If the other player is silent for ten seconds the game plays on alone.
 
 ## Adding fighters
 

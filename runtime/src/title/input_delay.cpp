@@ -17,6 +17,7 @@
 // TTT2_TRACE_INPUT_DELAY=1 logs each delay the queues get.
 
 #include "cafe/ppc_ops.h"
+#include "cafe/input.h"
 #include "host/display_settings.h"
 
 #include <cstdio>
@@ -25,7 +26,8 @@
 PPC_FUNC(sub_05C5D7B0_orig);
 PPC_FUNC(sub_05C5D7B0) {
     sub_05C5D7B0_orig(ctx, base);
-    const std::optional<uint32_t> frames = cafe::host::display::active().input_delay;
+    std::optional<uint32_t> frames = cafe::host::display::active().input_delay;
+    if (!frames) frames = cafe::os::rollback_input_delay_frames();
     if (!frames) return;
     // (Said once: a mode's start asks again.)
     static bool said = false;

@@ -201,6 +201,19 @@ Thread* thread_for(uint32_t guest_thread) {
     return it == g_threads.end() ? nullptr : it->second;
 }
 
+std::vector<std::pair<uint32_t, uint32_t>> guest_thread_spans() {
+    KernelLock lock(g_kernel);
+    std::vector<std::pair<uint32_t, uint32_t>> spans;
+    for (const auto& [thread, host] : g_threads) {
+        (void)host;
+        spans.push_back({thread, thread + osthread::kSize});
+        const uint32_t top = field<uint32_t>(thread, osthread::kStackBase);
+        const uint32_t bottom = field<uint32_t>(thread, osthread::kStackEnd);
+        if (bottom != 0 && top > bottom) spans.push_back({bottom, top});
+    }
+    return spans;
+}
+
 Thread* create_internal_thread(const char* name, int core) {
     KernelLock lock(g_kernel);
     return make_internal_thread(name, 0x10000, core);

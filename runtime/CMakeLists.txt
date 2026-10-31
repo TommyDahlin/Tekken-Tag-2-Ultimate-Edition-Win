@@ -1,7 +1,5 @@
 set(TTT2_INSTALL_SOURCE src/install.cpp)
-if(NOT WIN32)
-    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
-endif()
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
 find_package(ZLIB REQUIRED)
 
 # Linked as objects, not an archive: strong import implementations here must
@@ -29,6 +27,8 @@ add_library(cafe_runtime OBJECT
     src/os/ax.cpp
     src/os/snd_user.cpp
     src/os/network.cpp
+    src/net/lockstep.cpp
+    src/net/rollback_net.cpp
     src/os/swkbd.cpp
     src/os/erreula.cpp
     src/os/dmae.cpp
@@ -67,13 +67,15 @@ add_library(cafe_runtime OBJECT
     src/gx2/state.cpp
     src/gx2/surface.cpp
     src/gx2/texture.cpp
+    src/title/fight_trace.cpp
     src/title/framedata.cpp
     src/title/gauge.cpp
     src/title/input_delay.cpp
     src/title/controllers.cpp
     src/title/practice.cpp
     src/title/presentation.cpp
-    src/title/roster.cpp)
+    src/title/roster.cpp
+    src/title/rollback_selftest.cpp)
 target_include_directories(cafe_runtime PUBLIC include PRIVATE src)
 target_compile_features(cafe_runtime PUBLIC cxx_std_20)
 find_package(Vulkan REQUIRED)
@@ -81,12 +83,11 @@ find_package(SDL3 REQUIRED CONFIG)
 # GLSL -> SPIR-V at run time.
 if(WIN32)
     target_include_directories(cafe_runtime PRIVATE ${CMAKE_SOURCE_DIR}/third_party/shaderc/libshaderc/include)
-    target_link_libraries(cafe_runtime PUBLIC bcrypt winpthread ole32 shell32 uuid)
+    target_link_libraries(cafe_runtime PUBLIC bcrypt winpthread ole32 shell32 uuid ws2_32)
 else()
     find_library(SHADERC_LIBRARY NAMES shaderc_shared REQUIRED)
-    target_link_libraries(cafe_runtime PUBLIC OpenSSL::Crypto)
 endif()
-target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title ZArchive::zarchive amd_addrlib cafe_latte
+target_link_libraries(cafe_runtime PUBLIC cafe_rpx cafe_title OpenSSL::Crypto OpenSSL::SSL ZArchive::zarchive amd_addrlib cafe_latte
     Vulkan::Vulkan SDL3::SDL3 ${SHADERC_LIBRARY})
 # Vulkan structures are initialised with only their sType.
 target_compile_options(cafe_runtime PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
