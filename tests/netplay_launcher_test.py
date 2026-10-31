@@ -337,5 +337,99 @@ class WindowTest(unittest.TestCase):
                 nl.config_path = original
 
 
+class SyncPacksTest(unittest.TestCase):
+    def make_packs(self, tmp: Path, packs: dict[str, str], grid: str = "") -> str:
+        folder = tmp / "characters"
+        folder.mkdir(exist_ok=True)
+        for name, text in packs.items():
+            (folder / name).mkdir(exist_ok=True)
+            (folder / name / "character.ini").write_text(text, encoding="utf-8")
+        if grid:
+            (folder / "shared").mkdir(exist_ok=True)
+            (folder / "shared" / "grid.ini").write_text(f"grid = {grid}\n", encoding="utf-8")
+        return str(folder)
+
+    def test_manifest_names_the_packs_and_skips_what_the_game_skips(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder = self.make_packs(Path(t), {"kzm": "a", "dnc": "b", ".new": "c"}, grid="rows")
+            (Path(folder) / "empty").mkdir()
+            (Path(folder) / "file.txt").write_text("x")
+            manifest = nl.pack_manifest(folder)
+            self.assertEqual(sorted(manifest), ["dnc", "kzm", nl.GRID_KEY])
+            self.assertEqual(manifest[nl.GRID_KEY], "rows")
+            self.assertEqual(nl.parse_manifest(nl.manifest_text(manifest)), manifest)
+        self.assertEqual(nl.pack_manifest(""), {})
+        self.assertEqual(nl.parse_manifest("not a manifest,::,/x:1"), {})
+        self.assertEqual(nl.parse_manifest(None), {})
+
+    def test_comparison_is_the_same_from_both_sides(self):
+        mine = {"kzm": "1", "dnc": "2", "elz": "3", "ita": "4", nl.GRID_KEY: "rows"}
+        theirs = {"kzm": "1", "dnc": "9", "ita": "4", "mrx": "5", nl.GRID_KEY: "rows"}
+        a, b = nl.compare_packs(mine, theirs), nl.compare_packs(theirs, mine)
+        self.assertEqual(a.shared, ["ita", "kzm"])
+        self.assertEqual(a.shared, b.shared)
+        self.assertEqual((a.different, a.only_mine, a.only_theirs), (["dnc"], ["elz"], ["mrx"]))
+        self.assertEqual((b.only_mine, b.only_theirs), (["mrx"], ["elz"]))
+        self.assertFalse(a.same)
+        self.assertFalse(a.grid_differs)
+        self.assertTrue(nl.compare_packs(mine, dict(mine)).same)
+        self.assertTrue(nl.compare_packs(mine, {**mine, nl.GRID_KEY: ""}).grid_differs)
+        self.assertIn("only you have: elz", nl.describe_comparison(a))
+        self.assertIn("only they have: mrx", nl.describe_comparison(a))
+
+    def test_the_game_is_told_which_packs_to_load(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder = self.make_packs(Path(t), {"kzm": "a", "dnc": "b", "elz": "c"})
+            theirs = nl.manifest_text({"kzm": nl.pack_manifest(folder)["kzm"], "dnc": "00000000", "mrx": "5"})
+            s = nl.Settings(mode="join", exe="ttt2", game_dir="g", characters=folder, peer="203.0.113.1",
+                            secret="x", their_packs=theirs)
+            self.assertEqual(nl.build_env(s, base={})["TTT2_NET_PACKS"], "kzm")
+            s.sync_packs = False
+            self.assertNotIn("TTT2_NET_PACKS", nl.build_env(s, base={}))
+            s.sync_packs, s.mode = True, "local"
+            self.assertNotIn("TTT2_NET_PACKS", nl.build_env(s, base={}))
+            s.mode, s.same_pc = "host", True
+            self.assertNotIn("TTT2_NET_PACKS", nl.build_env(s, base={}))
+            s.same_pc, s.their_packs = False, nl.manifest_text({"mrx": "5"})
+            self.assertEqual(nl.build_env(s, base={})["TTT2_NET_PACKS"], "-")
+            # a filter the shell had left over is not kept
+            self.assertNotIn("TTT2_NET_PACKS", nl.build_env(nl.Settings(), base={"TTT2_NET_PACKS": "kzm"}))
+
+    def test_both_launchers_pick_the_same_packs(self):
+        with tempfile.TemporaryDirectory() as t:
+            (Path(t) / "a").mkdir()
+            (Path(t) / "b").mkdir()
+            a = self.make_packs(Path(t) / "a", {"kzm": "1", "dnc": "2", "elz": "3"})
+            b = self.make_packs(Path(t) / "b", {"kzm": "1", "dnc": "different", "mrx": "5"})
+            host = nl.Settings(mode="host", my_address="203.0.113.7", secret="s", characters=a)
+            guest = nl.Settings(mode="join", my_address="198.51.100.4", secret="s", characters=b)
+            host_warnings = nl.apply_invite(host, nl.decode_invite(nl.encode_invite(guest, "g" * 64, "b")), "g" * 64, "a")
+            guest_warnings = nl.apply_invite(guest, nl.decode_invite(nl.encode_invite(host, "g" * 64, "a")), "g" * 64, "b")
+            self.assertEqual(nl.shared_packs(host), ["kzm"])
+            self.assertEqual(nl.shared_packs(host), nl.shared_packs(guest))
+            self.assertTrue(host_warnings and guest_warnings)
+            self.assertIn("Sync packs plays with the shared ones", guest_warnings[0])
+
+    def test_an_old_code_cannot_be_synced_and_the_game_does_not_start_until_that_is_said(self):
+        s = nl.Settings(mode="join", exe=__file__, game_dir="g", peer="203.0.113.1", secret="x")
+        self.assertTrue(any("Sync packs" in p for p in nl.validate(s)))
+        old = {"v": 1, "ip": "203.0.113.1", "packs": "abc"}
+        warnings = nl.apply_invite(s, old, "", "def")
+        self.assertEqual(s.their_packs, "")
+        self.assertIn("too old", warnings[0])
+        s.sync_packs = False
+        self.assertFalse(any("Sync packs" in p for p in nl.validate(s)))
+        s.sync_packs, s.same_pc = True, True
+        self.assertFalse(any("Sync packs" in p for p in nl.validate(s)))
+
+    def test_the_other_players_packs_are_not_saved(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = Path(t) / "settings.json"
+            nl.save_settings(nl.Settings(their_packs="kzm:1", sync_packs=False), path)
+            self.assertNotIn("their_packs", json.loads(path.read_text()))
+            loaded = nl.load_settings(path)
+            self.assertEqual((loaded.their_packs, loaded.sync_packs), ("", False))
+
+
 if __name__ == "__main__":
     unittest.main()

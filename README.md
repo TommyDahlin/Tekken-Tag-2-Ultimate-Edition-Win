@@ -658,6 +658,7 @@ variables below win over it.
 | `TTT2_NET_REMOTE_AS_P2=1` | the remote player is the second pad (a Pro Controller on WPAD channel 0); the server's pad is player 1 on both machines, the client's player 2 |
 | `TTT2_NET_LOCKSTEP=1` + `TTT2_NET_DELAY=<frames>` | lockstep: each frame waits for the other player's input, so both games get the same inputs (implies `TTT2_NET_REMOTE_AS_P2`); the input delay is 1-30 frames, default 3 |
 | `TTT2_SKIP_INTRO=<seconds>` | taps A and + (Start) alternately for that many seconds after start-up, to skip the logos and the intro movie (a longer time runs on into the menus and presses what is selected there) |
+| `TTT2_NET_PACKS=<a,b,c>` | loads only the character packs of those folders (`-`: none), so that both players load the same ones; the netplay launcher's *Sync packs* sets it |
 | `TTT2_NET_ROLLBACK_SERVER=1` | uses DTLS server handshake mode (client mode by default) |
 | `TTT2_NET_ROLLBACK_NO_DTLS=1` | disables DTLS for transport testing (DTLS is on by default) |
 | `TTT2_NET_ROLLBACK_PROFILE=enet|kcp` | transport profile tuning (`kcp` default) |
@@ -681,6 +682,18 @@ variables. It needs Python 3 with tkinter (included with Python on Windows;
   back (it carries the guest's address). A pasted code warns if your game or
   packs differ from theirs. *Both players are on this PC* starts a test with
   two windows.
+- **Sync packs** (on by default; under the codes) makes both games load the
+  same fighters. The codes list each player's character packs by folder name
+  and a short hash of its `character.ini`: no pack is ever sent, since a pack is
+  made from its player's own copy of Tekken 7 or 8. After a code is pasted the
+  window says which packs are the same on both sides, which only one player has
+  and which were made differently (*Compare…* lists them), and the game then
+  loads the shared ones only (`TTT2_NET_PACKS`). Both launchers reach the same
+  list from the two codes. To play with a pack you lack, add it with the
+  character launcher; a pack made differently needs the same importer version.
+  The game does not start until the other player's code is pasted, unless *Sync
+  packs* is off. If the select screen's layout (`shared/grid.ini`) differs, the
+  window says so: sync cannot fix that.
 - **Settings** has the input delay (with a suggestion from your ping), the
   encryption secret, how to start together, the intro skip, the game's own
   input delay (both players must match), the second controller as player 2 and
@@ -743,8 +756,8 @@ Without `lockstep` only inputs are sent and the games can drift apart.
 
 Limits: there is no rollback (the stall is the price of a bad connection). The
 game's random numbers are not synchronised yet, so do not pick *Random* for a
-fighter or a stage, and play the same game files and character packs on both
-sides. If the other player is silent for ten seconds the game plays on alone.
+fighter or a stage, and play the same game files and the same character packs on
+both sides (*Sync packs* in the launcher does the latter). If the other player is silent for ten seconds the game plays on alone.
 
 ## Adding fighters
 

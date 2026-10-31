@@ -1306,6 +1306,23 @@ void prepare_roster() {
         }
     }
     std::sort(candidates.begin(), candidates.end());
+    // TTT2_NET_PACKS=a,b,c loads only the packs of those folders ("-": none): the netplay launcher's
+    // "sync packs", so that both players load the same ones. Without it every pack is loaded.
+    if (const char* only = std::getenv("TTT2_NET_PACKS"); only && *only) {
+        std::vector<std::string> names;
+        for (size_t start = 0; start <= std::strlen(only);) {
+            const char* comma = std::strchr(only + start, ',');
+            const size_t end = comma ? static_cast<size_t>(comma - only) : std::strlen(only);
+            if (end > start) names.emplace_back(only + start, end - start);
+            start = end + 1;
+        }
+        const size_t before = candidates.size();
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&](const fs::path& candidate) {
+            return std::find(names.begin(), names.end(), candidate.filename().string()) == names.end();
+        }), candidates.end());
+        std::fprintf(stderr, "ttt2: packs: TTT2_NET_PACKS loads %zu of the %zu pack(s) found\n", candidates.size(),
+                     before);
+    }
     {
         std::ifstream grid(directory / "shared" / "grid.ini");
         for (std::string line; std::getline(grid, line);) {

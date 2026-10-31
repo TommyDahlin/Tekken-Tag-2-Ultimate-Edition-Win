@@ -60,9 +60,12 @@ class Settings:
     second_controller_p2: bool = True
     fullscreen: bool = False
     remember_addresses: bool = False
+    sync_packs: bool = True          # play only with the character packs both players have
+    their_packs: str = ""            # the other player's packs, from their code (not saved)
 
 
 ADDRESS_FIELDS = ("peer", "my_address")
+NOT_SAVED = ("their_packs",)
 
 # Variables the settings decide (cleared from the inherited environment first),
 # besides the TTT2_NET_* ones and the self-test and trace ones that slow the game.
@@ -108,7 +111,7 @@ def load_settings(path: Path | None = None) -> Settings:
         return settings
     known = {f.name: f for f in fields(Settings)}
     for key, value in data.items():
-        if key in known and isinstance(value, type(getattr(settings, key))):
+        if key in known and key not in NOT_SAVED and isinstance(value, type(getattr(settings, key))):
             setattr(settings, key, value)
     if settings.mode not in MODES:
         settings.mode = "local"
@@ -119,6 +122,8 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
     """Writes the settings. Addresses (personal data) go in only when asked for."""
     path = path or config_path()
     data = asdict(settings)
+    for key in NOT_SAVED:
+        data.pop(key, None)
     if not settings.remember_addresses:
         for key in ADDRESS_FIELDS:
             data[key] = ""
@@ -225,6 +230,105 @@ def count_packs(characters_dir: str) -> int:
     return sum(1 for p in folder.iterdir() if p.is_dir() and (p / "character.ini").is_file())
 
 
+# ----------------------------------------------------------------------------- syncing the packs
+
+# Every fighter added from a pack takes its place from the pack's character.ini and the
+# order of the packs: two games agree only when they load the same packs, made the same
+# way. A player's packs are named by folder and a short hash of that file. They are never
+# sent: the packs are made from each player's own copy of the other games.
+PACK_NAME = re.compile(r"[A-Za-z0-9_.-]{1,40}")
+GRID_KEY = "~grid"
+
+
+def pack_manifest(characters_dir: str) -> dict[str, str]:
+    """{pack folder: short hash of its character.ini}, as the game would load them, and the
+    select grid's layout under GRID_KEY (the game reads it from shared/grid.ini)."""
+    folder = Path(characters_dir) if characters_dir else None
+    manifest: dict[str, str] = {}
+    if folder is None or not folder.is_dir():
+        return manifest
+    for pack in sorted(folder.iterdir()):
+        ini = pack / "character.ini"
+        # (a name starting with a dot is a pack being written: the game skips it too)
+        if pack.name.startswith(".") or not pack.is_dir() or not ini.is_file() or not PACK_NAME.fullmatch(pack.name):
+            continue
+        manifest[pack.name] = hashlib.sha256(ini.read_bytes()).hexdigest()[:8]
+    try:
+        for line in (folder / "shared" / "grid.ini").read_text(encoding="utf-8", errors="replace").splitlines():
+            key, _, value = line.split("#")[0].partition("=")
+            if key.strip() == "grid":
+                manifest[GRID_KEY] = value.strip()[:16]
+    except OSError:
+        pass
+    return manifest
+
+
+def manifest_text(manifest: dict[str, str]) -> str:
+    return ",".join(f"{name}:{digest}" for name, digest in manifest.items())
+
+
+def parse_manifest(text: object) -> dict[str, str]:
+    manifest: dict[str, str] = {}
+    if not isinstance(text, str):
+        return manifest
+    for item in text.split(","):
+        name, _, digest = item.rpartition(":")
+        if (PACK_NAME.fullmatch(name) or name == GRID_KEY) and re.fullmatch(r"[A-Za-z0-9]{0,16}", digest):
+            manifest[name] = digest
+    return manifest
+
+
+@dataclass
+class PackComparison:
+    shared: list[str]          # the same pack on both sides: what a synced game loads
+    different: list[str]       # a pack both have, made differently (another importer or slot)
+    only_mine: list[str]
+    only_theirs: list[str]
+    grid_differs: bool
+
+    @property
+    def same(self) -> bool:
+        return not (self.different or self.only_mine or self.only_theirs or self.grid_differs)
+
+
+def compare_packs(mine: dict[str, str], theirs: dict[str, str]) -> PackComparison:
+    """Both players get the same answer from the same two manifests."""
+    names_mine = {n for n in mine if n != GRID_KEY}
+    names_theirs = {n for n in theirs if n != GRID_KEY}
+    both = sorted(names_mine & names_theirs)
+    return PackComparison(
+        shared=[n for n in both if mine[n] == theirs[n]],
+        different=[n for n in both if mine[n] != theirs[n]],
+        only_mine=sorted(names_mine - names_theirs),
+        only_theirs=sorted(names_theirs - names_mine),
+        grid_differs=mine.get(GRID_KEY, "") != theirs.get(GRID_KEY, ""))
+
+
+def describe_comparison(c: PackComparison, brief: bool = False) -> str:
+    """What differs, for the window."""
+    if c.same:
+        return f"Your character packs are the same as theirs ({len(c.shared)})."
+    parts = [f"{len(c.shared)} pack(s) are the same on both sides."]
+    for what, names in (("only you have", c.only_mine), ("only they have", c.only_theirs),
+                        ("made differently on the two sides", c.different)):
+        if names:
+            shown = ", ".join(names[:6] if brief else names) + (", …" if brief and len(names) > 6 else "")
+            parts.append(f"{len(names)} {what}: {shown}.")
+    if c.grid_differs:
+        parts.append("The select screen's layout differs (shared/grid.ini).")
+    return " ".join(parts)
+
+
+def shared_packs(s: Settings, characters_dir: str | None = None) -> list[str] | None:
+    """The packs a synced game loads (None: not syncing, or the other player's are not known yet)."""
+    if not (s.sync_packs and s.mode in ("host", "join")) or s.same_pc:
+        return None
+    theirs = parse_manifest(s.their_packs)
+    if not s.their_packs or not theirs:
+        return None
+    return compare_packs(pack_manifest(s.characters if characters_dir is None else characters_dir), theirs).shared
+
+
 # ----------------------------------------------------------------------------- addresses
 
 def lan_address() -> str:
@@ -266,7 +370,7 @@ def encode_invite(s: Settings, game_fp: str, packs_fp: str) -> str:
     data = {
         "v": 1, "ip": s.my_address, "port": s.port, "delay": s.delay, "dtls": s.encrypt,
         "psk": s.secret if s.encrypt else "", "sync": s.sync, "idelay": s.game_input_delay,
-        "game": game_fp[:12], "packs": packs_fp,
+        "game": game_fp[:12], "packs": packs_fp, "pk": manifest_text(pack_manifest(s.characters)),
     }
     raw = json.dumps(data, separators=(",", ":")).encode()
     return INVITE_PREFIX + base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -304,11 +408,19 @@ def apply_invite(s: Settings, invite: dict, game_fp: str, packs_fp: str) -> list
         s.sync = invite.get("sync", s.sync) if invite.get("sync") in ("start", "now") else s.sync
         s.game_input_delay = int(invite.get("idelay", s.game_input_delay))
     their_game, their_packs = invite.get("game", ""), invite.get("packs", "")
+    manifest = invite.get("pk", "")
+    s.their_packs = manifest if isinstance(manifest, str) and parse_manifest(manifest) else ""
     if their_game and game_fp and their_game != game_fp[:12]:
         warnings.append("Your game is not the same as theirs (a different version): the two games will not agree.")
-    if their_packs and their_packs != packs_fp:
+    if s.their_packs:
+        comparison = compare_packs(pack_manifest(s.characters), parse_manifest(s.their_packs))
+        if not comparison.same:
+            warnings.append(describe_comparison(comparison, brief=True) +
+                            (" Sync packs plays with the shared ones." if s.sync_packs else
+                             " Tick Sync packs to play with the shared ones."))
+    elif their_packs and their_packs != packs_fp:
         warnings.append("Your character packs are not the same as theirs: fighters may not match "
-                        "(play without Tekken 7 fighters, or install the same packs).")
+                        "(their launcher is too old to list them, so they cannot be synced).")
     return warnings
 
 
@@ -332,6 +444,9 @@ def validate(s: Settings) -> list[str]:
                             else "Enter the host's address (or paste their code).")
         if s.encrypt and not s.secret:
             problems.append("Encryption needs a shared secret (the host's code carries it).")
+        if s.sync_packs and not s.same_pc and not parse_manifest(s.their_packs):
+            problems.append("Paste their code (it lists their character packs) so that the packs can be synced, "
+                            "or untick Sync packs.")
     return problems
 
 
@@ -364,6 +479,9 @@ def build_env(s: Settings, base: dict[str, str] | None = None, portable: Path | 
         env["TTT2_LOCAL_PLAYERS"] = "1"
 
     if s.mode in ("host", "join"):
+        names = shared_packs(s, s.characters or inherited_packs)
+        if names is not None:
+            env["TTT2_NET_PACKS"] = ",".join(names) or "-"   # "-": none, whatever the folder holds
         env["TTT2_NET_ROLLBACK"] = "1"
         env["TTT2_NET_LOCKSTEP"] = "1"
         env["TTT2_NET_DELAY"] = str(s.delay)
@@ -552,6 +670,7 @@ def make_app(root_dir: Path):
                 "second_controller_p2": self._var(tk.BooleanVar, "second_controller_p2"),
                 "fullscreen": self._var(tk.BooleanVar, "fullscreen"),
                 "remember_addresses": self._var(tk.BooleanVar, "remember_addresses"),
+                "sync_packs": self._var(tk.BooleanVar, "sync_packs"),
             }
             notebook = ttk.Notebook(self)
             notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -610,6 +729,13 @@ def make_app(root_dir: Path):
             r += 1
             self.code_note = ttk.Label(self.net, text="", wraplength=620, justify="left")
             self.code_note.grid(row=r, column=0, columnspan=3, sticky="w")
+            r += 1
+            ttk.Checkbutton(self.net, text="Sync packs: play only with the character packs we both have",
+                            variable=self.vars["sync_packs"]).grid(row=r, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            ttk.Button(self.net, text="Compare…", command=self._show_pack_details).grid(row=r, column=2, sticky="w", padx=8, pady=(6, 0))
+            r += 1
+            self.pack_sync_note = ttk.Label(self.net, text="", wraplength=620, justify="left")
+            self.pack_sync_note.grid(row=r, column=0, columnspan=3, sticky="w")
 
             run = ttk.Frame(f)
             run.grid(row=2, column=0, sticky="ew")
@@ -729,8 +855,41 @@ def make_app(root_dir: Path):
             warnings = apply_invite(self.settings, invite, game_fp, packs_fp)
             for key in ("peer", "port", "delay", "encrypt", "secret", "sync", "game_input_delay"):
                 self.vars[key].set(getattr(self.settings, key))
+            self._refresh_all()
             note = "Applied." if not warnings else "Applied, but: " + " ".join(warnings)
             self.code_note.configure(text=note, foreground="#060" if not warnings else "#a60")
+
+        def _pack_comparison(self) -> PackComparison | None:
+            theirs = parse_manifest(self.settings.their_packs)
+            if not theirs:
+                return None
+            return compare_packs(pack_manifest(self.settings.characters), theirs)
+
+        def _refresh_pack_note(self) -> None:
+            comparison = self._pack_comparison()
+            if self.settings.mode == "local" or self.settings.same_pc:
+                text = ""
+            elif comparison is None:
+                text = "Paste their code to compare character packs." if self.settings.sync_packs else ""
+            else:
+                text = describe_comparison(comparison, brief=True)
+                if self.settings.sync_packs and not comparison.same:
+                    text += f" The game will load the {len(comparison.shared)} shared pack(s) only."
+            self.pack_sync_note.configure(text=text, foreground="#060" if comparison and comparison.same else "#a60")
+
+        def _show_pack_details(self) -> None:
+            comparison = self._pack_comparison()
+            if comparison is None:
+                messagebox.showinfo("Character packs", "Paste their code first: it lists their character packs "
+                                    "(only the folder names and a short hash, never the packs).")
+                return
+            lines = [describe_comparison(comparison)]
+            if comparison.shared:
+                lines.append("\nShared: " + ", ".join(comparison.shared))
+            lines.append("\nPacks are made from each player's own copy of the other games and are never sent. "
+                         "To get one you lack, add it with the character launcher (the importer); a pack made "
+                         "differently needs the same importer version on both sides.")
+            messagebox.showinfo("Character packs", "\n".join(lines))
 
         def _suggest_delay(self) -> None:
             try:
@@ -749,6 +908,7 @@ def make_app(root_dir: Path):
                 self._set_state(child, "normal" if net else "disabled")
             self.peer_label.configure(text="Guest's address:" if self.settings.mode == "host" else "Host's address:")
             self._refresh_code()
+            self._refresh_pack_note()
             ok, message = game_status(self.settings.game_dir)
             self.game_note.configure(text=message, foreground="#060" if ok else "#a00")
             count = count_packs(self.settings.characters)
